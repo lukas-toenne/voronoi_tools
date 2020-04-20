@@ -28,20 +28,39 @@ import bpy
 import bmesh
 from bpy_types import Operator
 from bpy.props import BoolProperty
+from mathutils import Vector
 
 
-def edit_mode_out():
-    bpy.ops.object.mode_set(mode='OBJECT')
+class InputPoint:
+    co : Vector((0, 0, 0))
+
+    def __init__(self, co):
+        self.co = co
 
 
-def edit_mode_in():
-    bpy.ops.object.mode_set(mode='EDIT')
+def get_points_from_children(context, obj):
+    depsgraph = context.evaluated_depsgraph_get()
+
+    matinv = obj.matrix_world.inverted()
+
+    points = []
+    for child in obj.children:
+        child_eval = child.evaluated_get(depsgraph)
+        mesh_from_eval = child_eval.to_mesh()
+
+        mat = matinv @ child_eval.matrix_world
+
+        if mesh_from_eval:
+            points.extend([InputPoint(mat @ v.co) for v in mesh_from_eval.vertices])
+
+    return points
 
 
-class AddSpheronoids(Operator):
-    """Generate a random set of points and Voronoi cells on a unit sphere."""
-    bl_idname = 'mesh.spheronoids_add'
-    bl_label = 'Add Spheronoids'
+class AddVoronoiCells(Operator):
+    """Generate Voronoi cells on a surface."""
+    bl_idname = 'mesh.voronoi_add'
+    bl_label = 'Add Voronoi Cells'
+    bl_options = {'UNDO', 'REGISTER'}
 
     clear_mesh_data: BoolProperty(
         name        = "Clear Mesh",
@@ -51,58 +70,65 @@ class AddSpheronoids(Operator):
     @classmethod
     def poll(cls, context):
         active_object = context.active_object
-        return active_object and active_object.type == 'MESH' and active_object.mode == 'EDIT'
+        return active_object and active_object.type == 'MESH'
 
     def gen_spheronoids(self, context):
-        edit_mode_out()
+        obj = context.active_object
 
-        try:
-            object = context.active_object
-            bm = bmesh.new()
-            bm.from_mesh(object.data)
+        points = get_points_from_children(context, obj)
 
-            if self.clear_mesh_data:
-                bm.clear()
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
 
-            # edges = get_edge_rings(bm, keep_caps = True)
-            # if not edges:
-            #     self.report({'WARNING'}, "No suitable selection found")
-            #     return False
+        if self.clear_mesh_data:
+            bm.clear()
 
-            # result = bmesh.ops.subdivide_edges(
-            #     bm,
-            #     edges = edges,
-            #     cuts = int(self.num_cuts),
-            #     use_grid_fill = bool(self.use_grid_fill),
-            #     use_single_edge = bool(self.use_single_edge),
-            #     quad_corner_type = str(self.corner_type))
+        for pt in points:
+            bm.verts.new(pt.co)
 
-            # bpy.ops.mesh.select_all(action='DESELECT')
-            # bm.select_mode = {'EDGE'}
+        # edges = get_edge_rings(bm, keep_caps = True)
+        # if not edges:
+        #     self.report({'WARNING'}, "No suitable selection found")
+        #     return False
 
-            # inner = result['geom_inner']
-            # for edge in filter(lambda e: isinstance(e, bmesh.types.BMEdge), inner):
-            #     edge.select = True
+        # result = bmesh.ops.subdivide_edges(
+        #     bm,
+        #     edges = edges,
+        #     cuts = int(self.num_cuts),
+        #     use_grid_fill = bool(self.use_grid_fill),
+        #     use_single_edge = bool(self.use_single_edge),
+        #     quad_corner_type = str(self.corner_type))
 
-            bm.to_mesh(object.data)
-            bm.free()
+        # bpy.ops.mesh.select_all(action='DESELECT')
+        # bm.select_mode = {'EDGE'}
 
-        finally:
-            edit_mode_in()
+        # inner = result['geom_inner']
+        # for edge in filter(lambda e: isinstance(e, bmesh.types.BMEdge), inner):
+        #     edge.select = True
+
+        bm.to_mesh(obj.data)
+        bm.free()
+
+        obj.data.update()
 
         return True
 
     def execute(self, context):
-        if not self.gen_spheronoids(context):
-            return {'CANCELLED'}
+        active_object = context.active_object
+        orig_mode = active_object.mode
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            if not self.gen_spheronoids(context):
+                return {'CANCELLED'}
+        finally:
+            bpy.ops.object.mode_set(mode=orig_mode)
 
         return {'FINISHED'}
 
 
 def register():
-    print("I REGISTERED!")
-    bpy.utils.register_class(AddSpheronoids)
+    bpy.utils.register_class(AddVoronoiCells)
 
 def unregister():
-    print("I UNREGISTERED!")
-    bpy.utils.unregister_class(AddSpheronoids)
+    bpy.utils.unregister_class(AddVoronoiCells)

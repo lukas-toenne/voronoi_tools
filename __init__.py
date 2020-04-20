@@ -25,19 +25,19 @@
 # <pep8 compliant>
 
 bl_info = {
-    'name': 'Spheronoids',
+    'name': 'Voronoi Tools',
     'author': 'Lukas Toenne',
     'version': (1, 0, 0),
     'blender': (2, 82, 0),
     'location': '3D View',
     'description':
-        'Generates random voronoi patterns on a unit sphere',
+        'Tools for generating Voronoi pattern meshes',
     "wiki_url": "",
     'category': 'Add Mesh',
     'support': 'COMMUNITY',
 }
 
-# Fix broken script reload
+# Runtime script reload
 if "bpy" in locals():
     import importlib
 
