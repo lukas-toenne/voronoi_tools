@@ -26,6 +26,7 @@
 
 import bpy
 import bmesh
+import math
 from bpy_types import Operator
 from bpy.props import BoolProperty
 from mathutils import Vector
@@ -38,7 +39,8 @@ class InputPoint:
         self.co = co
 
 
-def get_points_from_children(context, obj):
+def get_points_from_children(context):
+    obj = context.active_object
     depsgraph = context.evaluated_depsgraph_get()
 
     matinv = obj.matrix_world.inverted()
@@ -54,6 +56,81 @@ def get_points_from_children(context, obj):
             points.extend([InputPoint(mat @ v.co) for v in mesh_from_eval.vertices])
 
     return points
+
+
+def project_points(points):
+    for i in range(len(points)):
+        points[i].co.z = 0.0
+
+
+def radial_sort_points(points):
+    center = Vector((0, 0, 0))
+    for pt in points:
+        center += pt.co
+    center /= len(points)
+    points.sort(key = lambda pt: (pt.co - center).length_squared)
+
+
+def do_sweephull(bm, points):
+    project_points(points)
+    if len(points) < 3:
+        return
+
+    radial_sort_points(points)
+
+    # Create vertices for all points
+    point_verts = []
+    for pt in points:
+        point_verts.append(bm.verts.new(pt.co))
+    bm.verts.ensure_lookup_table()
+
+    def is_ccw_winding(i, j, k):
+        a = points[i].co
+        b = points[j].co
+        c = points[k].co
+        return (b - a).cross(c - a).z > 0
+
+    def add_point_to_convex_hull(convex_hull, point_index):
+        new_convex_hull = []
+
+        # Returns true if the point is on the outside of the convex hull edge (ci, cj).
+        # Indices are in the convex_hull array!
+        def is_edge_visible(ci, cj):
+            return not is_ccw_winding(point_index, convex_hull[ci], convex_hull[cj])
+
+        was_visible = is_edge_visible(-1, 0) # visibility of last edge
+        for c in range(len(convex_hull)):
+            next_c = (c + 1) % len(convex_hull)
+            # Is the convex hull edge visible from the new point?
+            is_visible = is_edge_visible(c, next_c)
+
+            hull_index = convex_hull[c]
+            hull_index_next = convex_hull[next_c]
+
+            # Connect to visible edges
+            if is_visible:
+                bm.faces.new((point_verts[point_index], point_verts[hull_index_next], point_verts[hull_index]))
+
+            # Update the convex hull
+
+            # Discard vertex if both edge are visible from the new point
+            if not (was_visible and is_visible):
+                new_convex_hull.append(hull_index)
+
+            # Insert new point at start of visible section
+            if (not was_visible) and is_visible:
+                new_convex_hull.append(point_index)
+
+            was_visible = is_visible
+
+        convex_hull[:] = new_convex_hull
+
+    # Add first 3 verts as the first triangle
+    bm.faces.new((point_verts[0], point_verts[1], point_verts[2]))
+    convex_hull = [0, 1, 2] if is_ccw_winding(0, 1, 2) else [2, 1, 0]
+
+    for i in range(3, len(points)):
+        add_point_to_convex_hull(convex_hull, i)
 
 
 class AddVoronoiCells(Operator):
@@ -72,10 +149,8 @@ class AddVoronoiCells(Operator):
         active_object = context.active_object
         return active_object and active_object.type == 'MESH'
 
-    def gen_spheronoids(self, context):
+    def generate_mesh(self, context):
         obj = context.active_object
-
-        points = get_points_from_children(context, obj)
 
         bm = bmesh.new()
         bm.from_mesh(obj.data)
@@ -83,28 +158,7 @@ class AddVoronoiCells(Operator):
         if self.clear_mesh_data:
             bm.clear()
 
-        for pt in points:
-            bm.verts.new(pt.co)
-
-        # edges = get_edge_rings(bm, keep_caps = True)
-        # if not edges:
-        #     self.report({'WARNING'}, "No suitable selection found")
-        #     return False
-
-        # result = bmesh.ops.subdivide_edges(
-        #     bm,
-        #     edges = edges,
-        #     cuts = int(self.num_cuts),
-        #     use_grid_fill = bool(self.use_grid_fill),
-        #     use_single_edge = bool(self.use_single_edge),
-        #     quad_corner_type = str(self.corner_type))
-
-        # bpy.ops.mesh.select_all(action='DESELECT')
-        # bm.select_mode = {'EDGE'}
-
-        # inner = result['geom_inner']
-        # for edge in filter(lambda e: isinstance(e, bmesh.types.BMEdge), inner):
-        #     edge.select = True
+        do_sweephull(bm, get_points_from_children(context))
 
         bm.to_mesh(obj.data)
         bm.free()
@@ -119,7 +173,7 @@ class AddVoronoiCells(Operator):
 
         bpy.ops.object.mode_set(mode='OBJECT')
         try:
-            if not self.gen_spheronoids(context):
+            if not self.generate_mesh(context):
                 return {'CANCELLED'}
         finally:
             bpy.ops.object.mode_set(mode=orig_mode)
