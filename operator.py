@@ -29,7 +29,7 @@ import bmesh
 import math
 from bpy_types import Operator
 from bpy.props import BoolProperty
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 class InputPoint:
@@ -71,6 +71,7 @@ def radial_sort_points(points):
     points.sort(key = lambda pt: (pt.co - center).length_squared)
 
 
+# Construct a triangle mesh using the sweephull method.
 def do_sweephull(bm, points):
     project_points(points)
     if len(points) < 3:
@@ -90,7 +91,15 @@ def do_sweephull(bm, points):
         c = points[k].co
         return (b - a).cross(c - a).z > 0
 
-    def add_point_to_convex_hull(convex_hull, point_index):
+    # Add first 3 verts as the first triangle
+    if is_ccw_winding(0, 1, 2):
+        bm.faces.new((point_verts[0], point_verts[1], point_verts[2]))
+        convex_hull = [0, 1, 2]
+    else:
+        bm.faces.new((point_verts[2], point_verts[1], point_verts[0]))
+        convex_hull = [2, 1, 0]
+
+    for point_index in range(3, len(points)):
         new_convex_hull = []
 
         # Returns true if the point is on the outside of the convex hull edge (ci, cj).
@@ -125,12 +134,77 @@ def do_sweephull(bm, points):
 
         convex_hull[:] = new_convex_hull
 
-    # Add first 3 verts as the first triangle
-    bm.faces.new((point_verts[0], point_verts[1], point_verts[2]))
-    convex_hull = [0, 1, 2] if is_ccw_winding(0, 1, 2) else [2, 1, 0]
 
-    for i in range(3, len(points)):
-        add_point_to_convex_hull(convex_hull, i)
+# Get the adjacent and opposing vertices for an edge diagonal.
+# Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
+# as well as the associated edges (in CCW order).
+def get_quad_verts(edge):
+    va = edge.verts[0]
+    vb = None
+    vc = edge.verts[1]
+    vd = None
+
+    ea = None
+    eb = None
+    ec = None
+    ed = None
+
+    for loop in va.link_loops:
+        prev_vert = loop.link_loop_prev.vert
+        next_vert = loop.link_loop_next.vert
+        if prev_vert == vc:
+            vb = next_vert
+            ea = loop.edge
+            eb = loop.link_loop_next.edge
+        if next_vert == vc:
+            vd = prev_vert
+            ed = loop.link_loop_prev.edge
+            ec = loop.link_loop_prev.link_loop_prev.edge
+
+    assert(va is not None)
+    assert(vb is not None)
+    assert(vc is not None)
+    assert(vd is not None)
+    return (va, vb, vc, vd), (ea, eb, ec, ed)
+
+
+# Vertices must form a non-overlapping polygon (can be concave).
+def is_delaunay(verts):
+    a = verts[0].co
+    b = verts[1].co
+    c = verts[2].co
+    d = verts[3].co
+    M = Matrix((
+        (a.x, a.y, a.length_squared, 1),
+        (b.x, b.y, b.length_squared, 1),
+        (c.x, c.y, c.length_squared, 1),
+        (d.x, d.y, d.length_squared, 1),
+        ))
+    return M.determinant() <= 0
+
+
+def do_edgeflip(bm, edges):
+    import collections
+
+    flipstack = collections.deque(maxlen=len(edges))
+    for edge in edges:
+        flipstack.append(edge)
+        edge.tag = True
+
+    while flipstack:
+        diag = flipstack.pop()
+        diag.tag = False
+
+        verts, edges = get_quad_verts(diag)
+        if not is_delaunay(verts):
+            bm.edges.remove(diag)
+            bm.faces.new((verts[0], verts[1], verts[3]))
+            bm.faces.new((verts[2], verts[3], verts[1]))
+
+            for edge in edges:
+                if not edge.tag and not edge.is_boundary:
+                    flipstack.append(edge)
+                    edge.tag = True
 
 
 class AddVoronoiCells(Operator):
@@ -158,7 +232,13 @@ class AddVoronoiCells(Operator):
         if self.clear_mesh_data:
             bm.clear()
 
-        do_sweephull(bm, get_points_from_children(context))
+        edge_start = len(bm.edges)
+
+        points = get_points_from_children(context)
+        do_sweephull(bm, points)
+
+        interior_edges = [edge for edge in bm.edges[edge_start:] if not edge.is_boundary]
+        do_edgeflip(bm, interior_edges)
 
         bm.to_mesh(obj.data)
         bm.free()
