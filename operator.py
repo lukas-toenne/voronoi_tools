@@ -28,7 +28,7 @@ import bpy
 import bmesh
 import math
 from bpy_types import Operator
-from bpy.props import BoolProperty
+from bpy.props import BoolProperty, EnumProperty
 from mathutils import Matrix, Vector
 
 
@@ -183,13 +183,14 @@ def is_delaunay(verts):
     return M.determinant() <= 0
 
 
-def do_edgeflip(bm, edges):
+def do_edgeflip(bm):
     import collections
 
-    flipstack = collections.deque(maxlen=len(edges))
-    for edge in edges:
-        flipstack.append(edge)
-        edge.tag = True
+    flipstack = collections.deque(maxlen=len(bm.edges))
+    for edge in bm.edges:
+        if not edge.is_boundary:
+            flipstack.append(edge)
+            edge.tag = True
 
     while flipstack:
         diag = flipstack.pop()
@@ -207,16 +208,93 @@ def do_edgeflip(bm, edges):
                     edge.tag = True
 
 
+def construct_delaunay(points):
+    del_bm = bmesh.new()
+    do_sweephull(del_bm, points)
+    do_edgeflip(del_bm)
+    return del_bm
+
+
+def construct_voronoi(del_bm, triangulate_cells=True):
+    import collections
+
+    voro_bm = bmesh.new()
+
+    del_bm.faces.index_update()
+    voro_verts = collections.deque(maxlen=len(del_bm.faces))
+
+    # Add vertices for circumcenters
+    for face in del_bm.faces:
+        a = face.verts[0].co
+        b = face.verts[1].co
+        c = face.verts[2].co
+
+        La = a.length_squared
+        Lb = b.length_squared
+        Lc = c.length_squared
+        Sx = 0.5 * Matrix(((La, a.y, 1), (Lb, b.y, 1), (Lc, c.y, 1))).determinant()
+        Sy = 0.5 * Matrix(((a.x, La, 1), (b.x, Lb, 1), (c.x, Lc, 1))).determinant()
+        norm = Matrix(((a.x, a.y, 1), (b.x, b.y, 1), (c.x, c.y, 1))).determinant()
+        r0 = Matrix(((a.x, a.y, La), (b.x, b.y, Lb), (c.x, c.y, Lc))).determinant()
+        if norm != 0:
+            co = Vector((Sx, Sy, 0)) / norm
+            # r0 = math.sqrt(r0/norm + co.length_squared)
+
+            voro_verts.append(voro_bm.verts.new(co))
+
+    del_bm.verts.index_update() # TODO REMOVE
+    voro_loop = collections.deque()
+
+    for vert in del_bm.verts:
+        if len(vert.link_loops) < 3:
+            continue
+
+        # Gather circumcenter vertices of adjacent faces
+        voro_loop.clear()
+
+        # Find the beginning of the loop fan, in case there is a boundary edge
+        loop_start = vert.link_loops[0] # arbitrary start if there is no boundary edge
+        loop_end = loop_start
+        for loop in vert.link_loops:
+            # Boundary edge means the loop points at itself in the radial list
+            if loop.link_loop_radial_next == loop:
+                loop_start = loop
+
+            # Loop on the next edge of the fan in ccw direction
+            next_edge_loop = loop.link_loop_prev
+            if next_edge_loop.link_loop_radial_next == next_edge_loop:
+                loop_end = next_edge_loop
+
+        loop = loop_start
+        while True:
+            voro_loop.append(voro_verts[loop.face.index])
+
+            # Loop on the next edge of the fan in ccw direction
+            next_edge_loop = loop.link_loop_prev
+            loop = next_edge_loop.link_loop_radial_next
+            if loop == loop_end:
+                break
+
+        voro_bm.faces.new(voro_loop)
+
+    return voro_bm
+
+
 class AddVoronoiCells(Operator):
     """Generate Voronoi cells on a surface."""
     bl_idname = 'mesh.voronoi_add'
     bl_label = 'Add Voronoi Cells'
     bl_options = {'UNDO', 'REGISTER'}
 
-    clear_mesh_data: BoolProperty(
-        name        = "Clear Mesh",
-        description = "Clear existing mesh data",
-        default     = True)
+    output_graph : EnumProperty(
+        name="Output Graph",
+        description="Type of graph to generate from point data",
+        items={
+            ('VORONOI', "Voronoi", "Divides space into cells around the closest point"),
+            ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
+            },
+        default='VORONOI',
+    )
 
     @classmethod
     def poll(cls, context):
@@ -226,22 +304,21 @@ class AddVoronoiCells(Operator):
     def generate_mesh(self, context):
         obj = context.active_object
 
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-
-        if self.clear_mesh_data:
-            bm.clear()
-
-        edge_start = len(bm.edges)
-
         points = get_points_from_children(context)
-        do_sweephull(bm, points)
 
-        interior_edges = [edge for edge in bm.edges[edge_start:] if not edge.is_boundary]
-        do_edgeflip(bm, interior_edges)
+        if self.output_graph == 'DELAUNAY':
+            del_bm = construct_delaunay(points)
 
-        bm.to_mesh(obj.data)
-        bm.free()
+            del_bm.to_mesh(obj.data)
+            del_bm.free()
+
+        elif self.output_graph == 'VORONOI':
+            del_bm = construct_delaunay(points)
+            voro_bm = construct_voronoi(del_bm)
+
+            voro_bm.to_mesh(obj.data)
+            del_bm.free()
+            voro_bm.free()
 
         obj.data.update()
 
