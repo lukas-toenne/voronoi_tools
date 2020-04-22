@@ -28,7 +28,7 @@ import bpy
 import bmesh
 import math
 from bpy_types import Operator
-from bpy.props import BoolProperty, EnumProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty
 from mathutils import Matrix, Vector
 
 
@@ -63,6 +63,10 @@ def project_points(points):
         points[i].co.z = 0.0
 
 
+def limit_points(points, bounds_min, bounds_max):
+    points[:] = [p for p in points if p.co.x >= bounds_min[0] and p.co.x <= bounds_max[0] and p.co.y >= bounds_min[1] and p.co.y <= bounds_max[1]]
+
+
 def radial_sort_points(points):
     center = Vector((0, 0, 0))
     for pt in points:
@@ -73,7 +77,6 @@ def radial_sort_points(points):
 
 # Construct a triangle mesh using the sweephull method.
 def do_sweephull(bm, points):
-    project_points(points)
     if len(points) < 3:
         return
 
@@ -294,7 +297,32 @@ class AddVoronoiCells(Operator):
             ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
             },
         default='VORONOI',
-    )
+        )
+
+    bounds_mode : EnumProperty(
+        name="Bounds Mode",
+        description="Bounds behavior mode",
+        items={
+            ('NONE', "None", "Use all points"),
+            ('LIMIT', "Limit", "Use only points within limits"),
+            ('REPEAT', "Repeat", "Repeat points outside bounds"),
+            },
+        default='NONE',
+        )
+
+    bounds_min : FloatVectorProperty(
+        name="Bounds Minimum",
+        description="Minimum bounds value",
+        size=2,
+        default=(0.0, 0.0),
+        )
+
+    bounds_max : FloatVectorProperty(
+        name="Bounds Maximum",
+        description="Maximum bounds value",
+        size=2,
+        default=(1.0, 1.0),
+        )
 
     @classmethod
     def poll(cls, context):
@@ -305,6 +333,9 @@ class AddVoronoiCells(Operator):
         obj = context.active_object
 
         points = get_points_from_children(context)
+        project_points(points)
+        if self.bounds_mode != 'NONE':
+            limit_points(points, self.bounds_min, self.bounds_max)
 
         if self.output_graph == 'DELAUNAY':
             del_bm = construct_delaunay(points)
