@@ -41,8 +41,9 @@ bl_info = {
 if "bpy" in locals():
     import importlib
 
-    from . import operator
+    from . import operator, triangulator
     importlib.reload(operator)
+    importlib.reload(triangulator)
 
 import bpy
 from . import operator
