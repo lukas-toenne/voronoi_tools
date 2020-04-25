@@ -30,10 +30,23 @@ import math
 from mathutils import Matrix, Vector
 
 class InputPoint:
+    """Location of the point in object space."""
     co : Vector((0, 0, 0))
 
-    def __init__(self, co):
+    """
+    One of:
+    - ORIGINAL: Main vertex from the original point set
+    - REPEAT_POS: Point copy shifted in positive direction
+    - REPEAT_NEG: Point copy shifted in negative direction
+    
+    Only edges between original points and original and positive points
+    will be kept, all other are removed.
+    """
+    type : 'ORIGINAL'
+
+    def __init__(self, co, type):
         self.co = co
+        self.type = type
 
 # Get the adjacent and opposing vertices for an edge diagonal.
 # Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
@@ -82,6 +95,18 @@ def is_delaunay(verts):
     return M.determinant() <= 0
 
 class Triangulator:
+    def prepare_object(self, obj):
+        def ensure_vgroup(name):
+            vg = obj.vertex_groups.get(name)
+            if vg is None:
+                vg = obj.vertex_groups.new(name=name)
+            return vg
+
+        # Create vertex groups for point type
+        self.vg_original = ensure_vgroup("OriginalPoints").index
+        self.vg_repeat_pos = ensure_vgroup("RepeatedPointsPos").index
+        self.vg_repeat_neg = ensure_vgroup("RepeatedPointsNeg").index
+
     def add_debug_mesh(self, bm, name):
         pass
 
@@ -92,17 +117,32 @@ class Triangulator:
         center /= len(points)
         points.sort(key = lambda pt: (pt.co - center).length_squared)
 
-    # Construct a triangle mesh using the sweephull method.
-    def do_sweephull(self, bm, points):
+    def add_point_vertices(self, bm, points):
         if len(points) < 3:
             return
 
         self.radial_sort_points(points)
 
+        dvert_lay = bm.verts.layers.deform.verify()
+        print(dvert_lay)
+
         # Create vertices for all points
-        point_verts = []
         for pt in points:
-            point_verts.append(bm.verts.new(pt.co))
+            vert = bm.verts.new(pt.co)
+            dvert = vert[dvert_lay]
+
+            if pt.type == 'ORIGINAL':
+                dvert[self.vg_original] = 1.0
+            if pt.type == 'REPEAT_POS':
+                dvert[self.vg_repeat_pos] = 1.0
+            if pt.type == 'REPEAT_NEG':
+                dvert[self.vg_repeat_neg] = 1.0
+
+    # Construct a triangle mesh using the sweephull method.
+    def do_sweephull(self, bm, points):
+        if len(points) < 3:
+            return
+
         bm.verts.ensure_lookup_table()
 
         def is_ccw_winding(i, j, k):
@@ -113,10 +153,10 @@ class Triangulator:
 
         # Add first 3 verts as the first triangle
         if is_ccw_winding(0, 1, 2):
-            bm.faces.new((point_verts[0], point_verts[1], point_verts[2]))
+            bm.faces.new((bm.verts[0], bm.verts[1], bm.verts[2]))
             convex_hull = [0, 1, 2]
         else:
-            bm.faces.new((point_verts[2], point_verts[1], point_verts[0]))
+            bm.faces.new((bm.verts[2], bm.verts[1], bm.verts[0]))
             convex_hull = [2, 1, 0]
 
         for point_index in range(3, len(points)):
@@ -138,7 +178,7 @@ class Triangulator:
 
                 # Connect to visible edges
                 if is_visible:
-                    bm.faces.new((point_verts[point_index], point_verts[hull_index_next], point_verts[hull_index]))
+                    bm.faces.new((bm.verts[point_index], bm.verts[hull_index_next], bm.verts[hull_index]))
 
                 # Update the convex hull
 
@@ -182,17 +222,47 @@ class Triangulator:
 
                 self.add_debug_mesh(bm, "EdgeFlip")
 
-    def construct_delaunay(self, points):
+    """
+    Find and delete duplicate faces in the Delaunay triangulation.
+    Faces are duplicate if any vertex is in the negative repetition or all vertices are in the position repetition.
+    """
+    def prune_duplicate_faces(self, bm, points):
+        bm.verts.index_update()
+
+        duplicate_faces = []
+        for face in bm.faces:
+            has_original = False
+            has_repeat_neg = False
+
+            for vert in face.verts:
+                point = points[vert.index]
+                if point.type == 'ORIGINAL':
+                    has_original = True
+                if point.type == 'REPEAT_NEG':
+                    has_repeat_neg = True
+            if (not has_original) or has_repeat_neg:
+                duplicate_faces.append(face)
+
+        bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
+
+    def construct_delaunay(self, points, prune):
         del_bm = bmesh.new()
+
+        self.add_point_vertices(del_bm, points)
         self.do_sweephull(del_bm, points)
         self.do_edgeflip(del_bm)
+
+        if prune:
+            self.prune_duplicate_faces(del_bm, points)
+
         return del_bm
 
-    def construct_voronoi(self, del_bm, triangulate_cells=True):
+    def construct_voronoi(self, points, del_bm, triangulate_cells=True):
         import collections
 
         voro_bm = bmesh.new()
 
+        del_bm.verts.index_update()
         del_bm.faces.index_update()
         voro_verts = collections.deque(maxlen=len(del_bm.faces))
 
@@ -217,10 +287,14 @@ class Triangulator:
             else:
                 voro_verts.append(None)
 
-        del_bm.verts.index_update() # TODO REMOVE
         voro_loop = collections.deque()
 
         for vert in del_bm.verts:
+            # Avoid duplicate faces
+            point = points[vert.index]
+            if point.type != 'ORIGINAL':
+                continue
+
             if len(vert.link_loops) < 3:
                 continue
 

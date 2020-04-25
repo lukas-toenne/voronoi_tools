@@ -45,7 +45,7 @@ def get_points_from_children(context):
         mat = matinv @ child_eval.matrix_world
 
         if mesh_from_eval:
-            points.extend([InputPoint(mat @ v.co) for v in mesh_from_eval.vertices])
+            points.extend([InputPoint(mat @ v.co, 'ORIGINAL') for v in mesh_from_eval.vertices])
 
     return points
 
@@ -123,13 +123,21 @@ class AddVoronoiCells(Operator):
         if self.bounds_mode != 'NONE':
             points[:] = [p for p in points if p.co.x >= self.bounds_min[0] and p.co.x <= self.bounds_max[0] and p.co.y >= self.bounds_min[1] and p.co.y <= self.bounds_max[1]]
 
-        def offset_points(offset_x, offset_y):
-            return [InputPoint(p.co + Vector((offset_x, offset_y, 0))) for p in points]
-
         if self.bounds_mode == 'REPEAT':
-            dx = self.bounds_max[0] - self.bounds_min[0]
-            dy = self.bounds_max[1] - self.bounds_min[1]
-            points[:] = offset_points(-dx, -dy) + offset_points(0, -dy) + offset_points(dx, -dy) + offset_points(-dx, 0) + offset_points(0, 0) + offset_points(dx, 0) + offset_points(-dx, dy) + offset_points(0, dy) + offset_points(dx, dy)
+            def offset_points(offset_x, offset_y):
+                dx = self.bounds_max[0] - self.bounds_min[0]
+                dy = self.bounds_max[1] - self.bounds_min[1]
+                type = 'ORIGINAL'
+                if offset_x < 0:
+                    type = 'REPEAT_NEG'
+                elif offset_x > 0:
+                    type = 'REPEAT_POS'
+                elif offset_y < 0:
+                    type = 'REPEAT_NEG'
+                elif offset_y > 0:
+                    type = 'REPEAT_POS'
+                return [InputPoint(p.co + Vector((offset_x * dx, offset_y * dy, 0)), type) for p in points]
+            points[:] = offset_points(-1, -1) + offset_points(0, -1) + offset_points(1, -1) + offset_points(-1, 0) + offset_points(0, 0) + offset_points(1, 0) + offset_points(-1, 1) + offset_points(0, 1) + offset_points(1, 1)
 
     def generate_mesh(self, context):
         obj = context.active_object
@@ -139,18 +147,21 @@ class AddVoronoiCells(Operator):
         self.apply_bounds(points)
 
         triangulator = Triangulator()
+
+        triangulator.prepare_object(obj)
+
         if self.generate_debug_meshes:
             self.setup_debugging(context, obj, triangulator)
 
         if self.output_graph == 'DELAUNAY':
-            del_bm = triangulator.construct_delaunay(points)
+            del_bm = triangulator.construct_delaunay(points, prune=True)
 
             del_bm.to_mesh(obj.data)
             del_bm.free()
 
         elif self.output_graph == 'VORONOI':
-            del_bm = triangulator.construct_delaunay(points)
-            voro_bm = triangulator.construct_voronoi(del_bm)
+            del_bm = triangulator.construct_delaunay(points, prune=False)
+            voro_bm = triangulator.construct_voronoi(points, del_bm)
 
             voro_bm.to_mesh(obj.data)
             del_bm.free()

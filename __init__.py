@@ -42,8 +42,8 @@ if "bpy" in locals():
     import importlib
 
     from . import operator, triangulator
-    importlib.reload(operator)
     importlib.reload(triangulator)
+    importlib.reload(operator)
 
 import bpy
 from . import operator
