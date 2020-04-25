@@ -214,6 +214,8 @@ class Triangulator:
                 # r0 = math.sqrt(r0/norm + co.length_squared)
 
                 voro_verts.append(voro_bm.verts.new(co))
+            else:
+                voro_verts.append(None)
 
         del_bm.verts.index_update() # TODO REMOVE
         voro_loop = collections.deque()
@@ -240,7 +242,9 @@ class Triangulator:
 
             loop = loop_start
             while True:
-                voro_loop.append(voro_verts[loop.face.index])
+                center_vert = voro_verts[loop.face.index]
+                if center_vert:
+                    voro_loop.append(center_vert)
 
                 # Loop on the next edge of the fan in ccw direction
                 next_edge_loop = loop.link_loop_prev
@@ -248,7 +252,9 @@ class Triangulator:
                 if loop == loop_end:
                     break
 
-            voro_bm.faces.new(voro_loop)
+            # Can still get a loop with <3 verts in corner cases (colinear vertices)
+            if len(voro_loop) >= 3:
+                voro_bm.faces.new(voro_loop)
 
             self.add_debug_mesh(voro_bm, "VoronoiMesh")
 

@@ -27,6 +27,7 @@
 import bpy
 from bpy_types import Operator
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty
+from mathutils import Vector
 from .triangulator import Triangulator, InputPoint
 
 
@@ -49,15 +50,6 @@ def get_points_from_children(context):
     return points
 
 
-def project_points(points):
-    for i in range(len(points)):
-        points[i].co.z = 0.0
-
-
-def limit_points(points, bounds_min, bounds_max):
-    points[:] = [p for p in points if p.co.x >= bounds_min[0] and p.co.x <= bounds_max[0] and p.co.y >= bounds_min[1] and p.co.y <= bounds_max[1]]
-
-
 class AddVoronoiCells(Operator):
     """Generate Voronoi cells on a surface."""
     bl_idname = 'mesh.voronoi_add'
@@ -71,7 +63,7 @@ class AddVoronoiCells(Operator):
             ('VORONOI', "Voronoi", "Divides space into cells around the closest point"),
             ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
             },
-        default='VORONOI',
+        default='DELAUNAY',
         )
 
     bounds_mode : EnumProperty(
@@ -110,13 +102,41 @@ class AddVoronoiCells(Operator):
         active_object = context.active_object
         return active_object and active_object.type == 'MESH'
 
+    def execute(self, context):
+        active_object = context.active_object
+        orig_mode = active_object.mode
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            if not self.generate_mesh(context):
+                return {'CANCELLED'}
+        finally:
+            bpy.ops.object.mode_set(mode=orig_mode)
+
+        return {'FINISHED'}
+
+    def project_points(self, points):
+        for i in range(len(points)):
+            points[i].co.z = 0.0
+
+    def apply_bounds(self, points):
+        if self.bounds_mode != 'NONE':
+            points[:] = [p for p in points if p.co.x >= self.bounds_min[0] and p.co.x <= self.bounds_max[0] and p.co.y >= self.bounds_min[1] and p.co.y <= self.bounds_max[1]]
+
+        def offset_points(offset_x, offset_y):
+            return [InputPoint(p.co + Vector((offset_x, offset_y, 0))) for p in points]
+
+        if self.bounds_mode == 'REPEAT':
+            dx = self.bounds_max[0] - self.bounds_min[0]
+            dy = self.bounds_max[1] - self.bounds_min[1]
+            points[:] = offset_points(-dx, -dy) + offset_points(0, -dy) + offset_points(dx, -dy) + offset_points(-dx, 0) + offset_points(0, 0) + offset_points(dx, 0) + offset_points(-dx, dy) + offset_points(0, dy) + offset_points(dx, dy)
+
     def generate_mesh(self, context):
         obj = context.active_object
 
         points = get_points_from_children(context)
-        project_points(points)
-        if self.bounds_mode != 'NONE':
-            limit_points(points, self.bounds_min, self.bounds_max)
+        self.project_points(points)
+        self.apply_bounds(points)
 
         triangulator = Triangulator()
         if self.generate_debug_meshes:
@@ -139,19 +159,6 @@ class AddVoronoiCells(Operator):
         obj.data.update()
 
         return True
-
-    def execute(self, context):
-        active_object = context.active_object
-        orig_mode = active_object.mode
-
-        bpy.ops.object.mode_set(mode='OBJECT')
-        try:
-            if not self.generate_mesh(context):
-                return {'CANCELLED'}
-        finally:
-            bpy.ops.object.mode_set(mode=orig_mode)
-
-        return {'FINISHED'}
 
     def setup_debugging(self, context, obj, triangulator):
         scene = context.scene
