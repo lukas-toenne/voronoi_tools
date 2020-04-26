@@ -29,8 +29,13 @@ import bmesh
 import math
 from mathutils import Matrix, Vector
 
+"""
+Input point for the triangulator.
+"""
 class InputPoint:
-    """Location of the point in object space."""
+    """
+    Location of the point in object space.
+    """
     co : Vector((0, 0, 0))
 
     """
@@ -50,20 +55,29 @@ class InputPoint:
 
 degenerate_epsilon = 1.0e-9
 
+"""
+True if vertices are colinear or coinciding within the epsilon value.
+"""
 def is_degenerate_triangle(co0, co1, co2):
     return abs((co1 - co0).cross(co2 - co0).z) < degenerate_epsilon
 
-"""True if the direction of edges between the 3 points is turning counter-clockwise."""
+"""
+True if the direction of edges between the 3 points is turning counter-clockwise.
+"""
 def is_ccw_safe(co0, co1, co2):
     return (co1 - co0).cross(co2 - co0).z > degenerate_epsilon
 
-"""True if the direction of edges between the 3 points is turning clockwise."""
+"""
+True if the direction of edges between the 3 points is turning clockwise.
+"""
 def is_cw_safe(co0, co1, co2):
     return (co1 - co0).cross(co2 - co0).z < -degenerate_epsilon
 
-# Get the adjacent and opposing vertices for an edge diagonal.
-# Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
-# as well as the associated edges (in CCW order).
+"""
+Get the adjacent and opposing vertices for an edge diagonal.
+Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
+as well as the associated edges (in CCW order).
+"""
 def get_quad_verts(edge):
     # Only valid for internal edges with two adjacent faces
     assert(len(edge.link_loops) == 2)
@@ -88,7 +102,11 @@ def get_quad_verts(edge):
 
     return (va, vb, vc, vd), (ea, eb, ec, ed)
 
-# Vertices must form a non-overlapping polygon (can be concave).
+"""
+Returns True if the Delaunay condition is satisfied:
+Each vertex is outside the circumcircle for the other three.
+Vertices must form a non-overlapping polygon (can be concave).
+"""
 def is_delaunay(verts):
     a = verts[0].co
     b = verts[1].co
@@ -102,7 +120,15 @@ def is_delaunay(verts):
         ))
     return M.determinant() <= 0
 
+"""
+Utility class for generating a triangle mesh that satisfies the Delaunay condition.
+Voronoi diagrams can be constructed from the Delaunay mesh.
+"""
 class Triangulator:
+    """
+    Set up object ID block data, such as vertex groups.
+    This must be done so internal bmesh data layers are preserved in the Mesh data block.
+    """
     def prepare_object(self, obj):
         def ensure_vgroup(name):
             vg = obj.vertex_groups.get(name)
@@ -115,9 +141,9 @@ class Triangulator:
         self.vg_repeat_pos = ensure_vgroup("RepeatedPointsPos").index
         self.vg_repeat_neg = ensure_vgroup("RepeatedPointsNeg").index
 
-    def add_debug_mesh(self, bm, name):
-        pass
-
+    """
+    Sort the points list by distance from the center in preparation for the sweephull algorithm.
+    """
     def radial_sort_points(self, points):
         center = Vector((0, 0, 0))
         for pt in points:
@@ -125,6 +151,9 @@ class Triangulator:
         center /= len(points)
         points.sort(key = lambda pt: (pt.co - center).length_squared)
 
+    """
+    Add vertices to the Delaunay triangulation mesh based on input points.
+    """
     def add_point_vertices(self, bm, points):
         if len(points) < 3:
             return
@@ -145,7 +174,10 @@ class Triangulator:
             if pt.type == 'REPEAT_NEG':
                 dvert[self.vg_repeat_neg] = 1.0
 
-    # Construct a triangle mesh using the sweephull method.
+    """
+    Construct a triangle mesh using the sweephull method.
+    The resulting mesh is non-overlapping, but does not satisfy the Delaunay condition yet.
+    """
     def do_sweephull(self, bm, points):
         if len(points) < 3:
             return
@@ -211,6 +243,10 @@ class Triangulator:
 
             self.add_debug_mesh(bm, "SweepHull")
 
+    """
+    Iteratively apply the edge flipping method to ensure the Delaunay condition is satisfied for each edge.
+    The input mesh must be non-overlapping.
+    """
     def do_edgeflip(self, bm):
         import collections
 
@@ -265,6 +301,10 @@ class Triangulator:
 
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
+    """
+    Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
+    If prune is True, redundant mesh elements resulting from repetition will be removed.
+    """
     def construct_delaunay(self, points, prune):
         del_bm = bmesh.new()
 
@@ -277,6 +317,11 @@ class Triangulator:
 
         return del_bm
 
+    """
+    Constructs a Voronoi mesh based on input points a triangulated mesh.
+    The del_bm mesh must be a valid Delaunay triangulation.
+    If triangulate_cells is True, the Voronoi cells will be created with a triangle fan instead of ngons.
+    """
     def construct_voronoi(self, points, del_bm, triangulate_cells=True):
         import collections
 
@@ -353,3 +398,10 @@ class Triangulator:
             self.add_debug_mesh(voro_bm, "VoronoiMesh")
 
         return voro_bm
+
+    """
+    Debug function for recording intermediate mesh results.
+    Default implementation is a dummy, must be replaced externally.
+    """
+    def add_debug_mesh(self, bm, name):
+        pass
