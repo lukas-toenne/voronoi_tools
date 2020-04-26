@@ -126,6 +126,12 @@ class AddVoronoiCells(Operator):
         default=(1.0, 1.0),
         )
 
+    triangulate_cells : BoolProperty(
+        name="Triangulate Cells",
+        description="Create triangle fans for Voronoi cells instead of ngons",
+        default=False,
+        )
+
     generate_debug_meshes : BoolProperty(
         name="Generate Debug Meshes",
         description="Generate a collection of debug meshes for each step",
@@ -201,7 +207,7 @@ class AddVoronoiCells(Operator):
 
         elif self.output_graph == 'VORONOI':
             del_bm = triangulator.construct_delaunay(points, prune=False)
-            voro_bm = triangulator.construct_voronoi(points, del_bm)
+            voro_bm = triangulator.construct_voronoi(points, del_bm, triangulate_cells=self.triangulate_cells)
 
             voro_bm.to_mesh(obj.data)
             del_bm.free()

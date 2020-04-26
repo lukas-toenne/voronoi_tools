@@ -325,10 +325,10 @@ class Triangulator:
     def construct_voronoi(self, points, del_bm, triangulate_cells=True):
         import collections
 
-        voro_bm = bmesh.new()
-
         del_bm.verts.index_update()
         del_bm.faces.index_update()
+
+        voro_bm = bmesh.new()
         voro_verts = collections.deque(maxlen=len(del_bm.faces))
 
         # Add vertices for circumcenters
@@ -393,7 +393,13 @@ class Triangulator:
 
             # Can still get a loop with <3 verts in corner cases (colinear vertices)
             if len(voro_loop) >= 3:
-                voro_bm.faces.new(voro_loop)
+                if triangulate_cells:
+                    center_vert = voro_bm.verts.new(vert.co, vert)
+                    for i in range(len(voro_loop) - 1):
+                        voro_bm.faces.new((voro_loop[i], voro_loop[i + 1], center_vert))
+                    voro_bm.faces.new((voro_loop[len(voro_loop) - 1], voro_loop[0], center_vert))
+                else:
+                    voro_bm.faces.new(voro_loop)
 
             self.add_debug_mesh(voro_bm, "VoronoiMesh")
 
