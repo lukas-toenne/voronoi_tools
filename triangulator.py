@@ -48,36 +48,40 @@ class InputPoint:
         self.co = co
         self.type = type
 
+degenerate_epsilon = 1.0e-9
+
+def is_degenerate_triangle(co0, co1, co2):
+    return abs((co1 - co0).cross(co2 - co0).z) < degenerate_epsilon
+
+"""True if the direction of edges between the 3 points is turning counter-clockwise."""
+def is_ccw(co0, co1, co2):
+    return (co1 - co0).cross(co2 - co0).z > 0
+
 # Get the adjacent and opposing vertices for an edge diagonal.
 # Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
 # as well as the associated edges (in CCW order).
 def get_quad_verts(edge):
-    va = edge.verts[0]
-    vb = None
-    vc = edge.verts[1]
-    vd = None
+    # Only valid for internal edges with two adjacent faces
+    assert(len(edge.link_loops) == 2)
 
-    ea = None
-    eb = None
-    ec = None
-    ed = None
+    # Edge verts order does not follow winding order!
+    # Loops have to be used for getting vertices in the correct order.
+    # The start of the vertex list is arbitrary though, so can just pick the first loop as starting point.
 
-    for loop in va.link_loops:
-        prev_vert = loop.link_loop_prev.vert
-        next_vert = loop.link_loop_next.vert
-        if prev_vert == vc:
-            vb = next_vert
-            ea = loop.edge
-            eb = loop.link_loop_next.edge
-        if next_vert == vc:
-            vd = prev_vert
-            ed = loop.link_loop_prev.edge
-            ec = loop.link_loop_prev.link_loop_prev.edge
+    loop = edge.link_loops[0]
+    assert(loop.link_loop_next.vert == edge.link_loops[1].vert)
+    va = loop.vert
+    vd = loop.link_loop_prev.vert
+    ed = loop.link_loop_prev.edge
+    ec = loop.link_loop_prev.link_loop_prev.edge
 
-    assert(va is not None)
-    assert(vb is not None)
-    assert(vc is not None)
-    assert(vd is not None)
+    loop = edge.link_loops[1]
+    assert(loop.link_loop_next.vert == edge.link_loops[0].vert)
+    vc = loop.vert
+    vb = loop.link_loop_prev.vert
+    eb = loop.link_loop_prev.edge
+    ea = loop.link_loop_prev.link_loop_prev.edge
+
     return (va, vb, vc, vd), (ea, eb, ec, ed)
 
 # Vertices must form a non-overlapping polygon (can be concave).
@@ -124,7 +128,6 @@ class Triangulator:
         self.radial_sort_points(points)
 
         dvert_lay = bm.verts.layers.deform.verify()
-        print(dvert_lay)
 
         # Create vertices for all points
         for pt in points:
@@ -145,14 +148,11 @@ class Triangulator:
 
         bm.verts.ensure_lookup_table()
 
-        def is_ccw_winding(i, j, k):
-            a = points[i].co
-            b = points[j].co
-            c = points[k].co
-            return (b - a).cross(c - a).z > 0
+        def is_ccw_points(i, j, k):
+            return is_ccw(points[i].co, points[j].co, points[k].co)
 
         # Add first 3 verts as the first triangle
-        if is_ccw_winding(0, 1, 2):
+        if is_ccw_points(0, 1, 2):
             bm.faces.new((bm.verts[0], bm.verts[1], bm.verts[2]))
             convex_hull = [0, 1, 2]
         else:
@@ -165,7 +165,7 @@ class Triangulator:
             # Returns true if the point is on the outside of the convex hull edge (ci, cj).
             # Indices are in the convex_hull array!
             def is_edge_visible(ci, cj):
-                return not is_ccw_winding(point_index, convex_hull[ci], convex_hull[cj])
+                return not is_ccw_points(point_index, convex_hull[ci], convex_hull[cj])
 
             was_visible = is_edge_visible(-1, 0) # visibility of last edge
             for c in range(len(convex_hull)):
@@ -210,6 +210,11 @@ class Triangulator:
             diag.tag = False
 
             verts, edges = get_quad_verts(diag)
+
+            # Flipping degenerate triangles can cause overlap
+            if is_degenerate_triangle(verts[0].co, verts[2].co, verts[3].co) or is_degenerate_triangle(verts[2].co, verts[0].co, verts[1].co):
+                continue
+
             if not is_delaunay(verts):
                 bm.edges.remove(diag)
                 bm.faces.new((verts[0], verts[1], verts[3]))
