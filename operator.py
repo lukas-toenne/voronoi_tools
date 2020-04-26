@@ -31,21 +31,44 @@ from mathutils import Vector
 from .triangulator import Triangulator, InputPoint
 
 
-def get_points_from_children(context):
+def get_points_from_meshes(context):
     obj = context.active_object
     depsgraph = context.evaluated_depsgraph_get()
 
     matinv = obj.matrix_world.inverted()
 
     points = []
-    for child in obj.children:
-        child_eval = child.evaluated_get(depsgraph)
-        mesh_from_eval = child_eval.to_mesh()
+    for source_obj in context.selected_objects:
+        if source_obj == obj:
+            continue
 
-        mat = matinv @ child_eval.matrix_world
+        source_eval = source_obj.evaluated_get(depsgraph)
+        mat = matinv @ source_eval.matrix_world
 
+        mesh_from_eval = source_eval.to_mesh()
         if mesh_from_eval:
             points.extend([InputPoint(mat @ v.co, 'ORIGINAL') for v in mesh_from_eval.vertices])
+
+    return points
+
+
+def get_points_from_particles(context):
+    obj = context.active_object
+    depsgraph = context.evaluated_depsgraph_get()
+
+    matinv = obj.matrix_world.inverted()
+
+    points = []
+    for source_obj in context.selected_objects:
+        if source_obj == obj:
+            continue
+
+        source_eval = source_obj.evaluated_get(depsgraph)
+        # Particles are stored in world space, no need to apply the emitter object matrix
+        mat = matinv
+
+        for psys in source_eval.particle_systems:
+            points.extend([InputPoint(mat @ p.location, 'ORIGINAL') for p in psys.particles])
 
     return points
 
@@ -64,6 +87,18 @@ class AddVoronoiCells(Operator):
             ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
             },
         default='DELAUNAY',
+        )
+
+    use_vertex_sources : BoolProperty(
+        name="Use Mesh Sources",
+        description="Use vertices from selected objects as input points",
+        default=True,
+        )
+
+    use_particle_sources : BoolProperty(
+        name="Use Particle Sources",
+        description="Use particles from selected objects as input points",
+        default=False,
         )
 
     bounds_mode : EnumProperty(
@@ -142,7 +177,12 @@ class AddVoronoiCells(Operator):
     def generate_mesh(self, context):
         obj = context.active_object
 
-        points = get_points_from_children(context)
+        points = []
+        if self.use_vertex_sources:
+            points += get_points_from_meshes(context)
+        if self.use_particle_sources:
+            points += get_points_from_particles(context)
+
         self.project_points(points)
         self.apply_bounds(points)
 
