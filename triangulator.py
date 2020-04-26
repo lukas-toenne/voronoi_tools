@@ -54,8 +54,12 @@ def is_degenerate_triangle(co0, co1, co2):
     return abs((co1 - co0).cross(co2 - co0).z) < degenerate_epsilon
 
 """True if the direction of edges between the 3 points is turning counter-clockwise."""
-def is_ccw(co0, co1, co2):
-    return (co1 - co0).cross(co2 - co0).z > 0
+def is_ccw_safe(co0, co1, co2):
+    return (co1 - co0).cross(co2 - co0).z > degenerate_epsilon
+
+"""True if the direction of edges between the 3 points is turning clockwise."""
+def is_cw_safe(co0, co1, co2):
+    return (co1 - co0).cross(co2 - co0).z < -degenerate_epsilon
 
 # Get the adjacent and opposing vertices for an edge diagonal.
 # Returns vertices (a, b, c, d), where (a, c) is the edge and b, d are opposing vertices,
@@ -148,24 +152,35 @@ class Triangulator:
 
         bm.verts.ensure_lookup_table()
 
-        def is_ccw_points(i, j, k):
-            return is_ccw(points[i].co, points[j].co, points[k].co)
+        def is_ccw_safe_points(i, j, k):
+            return is_ccw_safe(points[i].co, points[j].co, points[k].co)
+
+        def is_cw_safe_points(i, j, k):
+            return is_cw_safe(points[i].co, points[j].co, points[k].co)
 
         # Add first 3 verts as the first triangle
-        if is_ccw_points(0, 1, 2):
-            bm.faces.new((bm.verts[0], bm.verts[1], bm.verts[2]))
-            convex_hull = [0, 1, 2]
-        else:
-            bm.faces.new((bm.verts[2], bm.verts[1], bm.verts[0]))
-            convex_hull = [2, 1, 0]
+        start_index = None
+        for i in range(len(points) - 2):
+            j = i + 1
+            k = i + 2
+            if is_ccw_safe_points(i, j, k):
+                bm.faces.new((bm.verts[i], bm.verts[j], bm.verts[k]))
+                convex_hull = [i, j, k]
+                start_index = i + 3
+                break
+            elif is_ccw_safe_points(k, j, i):
+                bm.faces.new((bm.verts[k], bm.verts[j], bm.verts[i]))
+                convex_hull = [k, j, i]
+                start_index = i + 3
+                break
 
-        for point_index in range(3, len(points)):
+        for point_index in range(start_index, len(points)):
             new_convex_hull = []
 
             # Returns true if the point is on the outside of the convex hull edge (ci, cj).
             # Indices are in the convex_hull array!
             def is_edge_visible(ci, cj):
-                return not is_ccw_points(point_index, convex_hull[ci], convex_hull[cj])
+                return is_cw_safe_points(point_index, convex_hull[ci], convex_hull[cj])
 
             was_visible = is_edge_visible(-1, 0) # visibility of last edge
             for c in range(len(convex_hull)):
