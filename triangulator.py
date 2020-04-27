@@ -126,6 +126,20 @@ Voronoi diagrams can be constructed from the Delaunay mesh.
 """
 class Triangulator:
     """
+    UV Layers to generate in the output mesh.
+    """
+    uv_layers = set()
+
+    """
+    If True then Voronoi cells will be created with a triangle fan instead of ngons.
+    """
+    triangulate_cells = False
+
+    def __init__(self, uv_layers=set(), triangulate_cells=False):
+        self.uv_layers = uv_layers
+        self.triangulate_cells = triangulate_cells
+
+    """
     Set up object ID block data, such as vertex groups.
     This must be done so internal bmesh data layers are preserved in the Mesh data block.
     """
@@ -320,9 +334,8 @@ class Triangulator:
     """
     Constructs a Voronoi mesh based on input points a triangulated mesh.
     The del_bm mesh must be a valid Delaunay triangulation.
-    If triangulate_cells is True, the Voronoi cells will be created with a triangle fan instead of ngons.
     """
-    def construct_voronoi(self, points, del_bm, triangulate_cells=True):
+    def construct_voronoi(self, points, del_bm):
         import collections
 
         del_bm.verts.index_update()

@@ -79,15 +79,8 @@ class AddVoronoiCells(Operator):
     bl_label = 'Add Voronoi Cells'
     bl_options = {'UNDO', 'REGISTER'}
 
-    output_graph : EnumProperty(
-        name="Output Graph",
-        description="Type of graph to generate from point data",
-        items={
-            ('VORONOI', "Voronoi", "Divides space into cells around the closest point"),
-            ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
-            },
-        default='DELAUNAY',
-        )
+    #
+    # Input settings
 
     use_vertex_sources : BoolProperty(
         name="Use Mesh Sources",
@@ -126,17 +119,55 @@ class AddVoronoiCells(Operator):
         default=(1.0, 1.0),
         )
 
+    #
+    # Output settings
+
+    output_graph : EnumProperty(
+        name="Output Graph",
+        description="Type of graph to generate from point data",
+        items={
+            ('VORONOI', "Voronoi", "Divides space into cells around the closest point"),
+            ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
+            },
+        default='DELAUNAY',
+        )
+
+    output_uv_layers : EnumProperty(
+        name="Output UV Layers",
+        description="UV Layers to generate in the output mesh",
+        items={
+            ('POLYGON', "Polygon", "Each polygon filling out UV space (-1..1)"),
+            ('BOUNDS', "Bounds", "Position within the input bounds (Local space coordinates if bounds are disabled)"),
+            ('CIRCUM_CIRCLE', "Circum Circle", "Position within the circumscribed circle of the triangle (Delaunay only)"),
+            ('CELL_CENTERED', "Cell Centered", "Local space coordinates with cell center at origin (Voronoi only)"),
+            ('EDGE_DISTANCE', "Edge Distance", "Local space distance from the cell edge (Voronoi only, needs triangulated cells)"),
+            },
+        default={'POLYGON'},
+        options={'ENUM_FLAG'},
+        )
+
+    #
+    # Delaunay specific settings
+
+    #
+    # Voronoi specific settings
+
     triangulate_cells : BoolProperty(
         name="Triangulate Cells",
         description="Create triangle fans for Voronoi cells instead of ngons",
         default=False,
         )
 
+    #
+    # Debug settings
+
     generate_debug_meshes : BoolProperty(
         name="Generate Debug Meshes",
         description="Generate a collection of debug meshes for each step",
         default=False,
         )
+
+    ################
 
     @classmethod
     def poll(cls, context):
@@ -192,7 +223,10 @@ class AddVoronoiCells(Operator):
         self.project_points(points)
         self.apply_bounds(points)
 
-        triangulator = Triangulator()
+        triangulator = Triangulator(
+            uv_layers=self.output_uv_layers,
+            triangulate_cells=self.triangulate_cells,
+            )
 
         triangulator.prepare_object(obj)
 
@@ -207,7 +241,7 @@ class AddVoronoiCells(Operator):
 
         elif self.output_graph == 'VORONOI':
             del_bm = triangulator.construct_delaunay(points, prune=False)
-            voro_bm = triangulator.construct_voronoi(points, del_bm, triangulate_cells=self.triangulate_cells)
+            voro_bm = triangulator.construct_voronoi(points, del_bm)
 
             voro_bm.to_mesh(obj.data)
             del_bm.free()
