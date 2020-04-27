@@ -28,6 +28,7 @@ import bpy
 import bmesh
 import math
 from mathutils import Matrix, Vector
+from . import props
 
 """
 Input point for the triangulator.
@@ -315,6 +316,11 @@ class Triangulator:
 
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
+    def add_data_layers(self, bm, points):
+        for uv_layer_id in self.uv_layers:
+            uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
+            bm.loops.layers.uv.new(uv_layer_name)
+
     """
     Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
     If prune is True, redundant mesh elements resulting from repetition will be removed.
@@ -329,22 +335,18 @@ class Triangulator:
         if prune:
             self.prune_duplicate_faces(del_bm, points)
 
+        self.add_data_layers(del_bm, points)
+
         return del_bm
 
+
     """
-    Constructs a Voronoi mesh based on input points a triangulated mesh.
-    The del_bm mesh must be a valid Delaunay triangulation.
+    Add vertices for circumcenters of the Delaunay triangles.
+    Returns a list with a vertex for each face (can be None if the face is degenerate).
     """
-    def construct_voronoi(self, points, del_bm):
-        import collections
+    def create_cell_center_verts(self, del_bm, voro_bm):
+        center_verts = collections.deque(maxlen=len(del_bm.faces))
 
-        del_bm.verts.index_update()
-        del_bm.faces.index_update()
-
-        voro_bm = bmesh.new()
-        voro_verts = collections.deque(maxlen=len(del_bm.faces))
-
-        # Add vertices for circumcenters
         for face in del_bm.faces:
             a = face.verts[0].co
             b = face.verts[1].co
@@ -361,12 +363,17 @@ class Triangulator:
                 co = Vector((Sx, Sy, 0)) / norm
                 # r0 = math.sqrt(r0/norm + co.length_squared)
 
-                voro_verts.append(voro_bm.verts.new(co))
+                center_verts.append(voro_bm.verts.new(co))
             else:
-                voro_verts.append(None)
+                center_verts.append(None)
 
+        return center_verts
+
+    """
+    Creates a face for each cell of the Voronoi graph.
+    """
+    def create_cell_faces(self, del_bm, voro_bm, points, center_verts):
         voro_loop = collections.deque()
-
         for vert in del_bm.verts:
             # Avoid duplicate faces
             point = points[vert.index]
@@ -394,7 +401,7 @@ class Triangulator:
 
             loop = loop_start
             while True:
-                center_vert = voro_verts[loop.face.index]
+                center_vert = center_verts[loop.face.index]
                 if center_vert:
                     voro_loop.append(center_vert)
 
@@ -406,7 +413,7 @@ class Triangulator:
 
             # Can still get a loop with <3 verts in corner cases (colinear vertices)
             if len(voro_loop) >= 3:
-                if triangulate_cells:
+                if self.triangulate_cells:
                     center_vert = voro_bm.verts.new(vert.co, vert)
                     for i in range(len(voro_loop) - 1):
                         voro_bm.faces.new((voro_loop[i], voro_loop[i + 1], center_vert))
@@ -415,6 +422,22 @@ class Triangulator:
                     voro_bm.faces.new(voro_loop)
 
             self.add_debug_mesh(voro_bm, "VoronoiMesh")
+
+    """
+    Constructs a Voronoi mesh based on input points a triangulated mesh.
+    The del_bm mesh must be a valid Delaunay triangulation.
+    """
+    def construct_voronoi(self, points, del_bm):
+        import collections
+
+        del_bm.verts.index_update()
+        del_bm.faces.index_update()
+
+        voro_bm = bmesh.new()
+        center_verts = self.create_cell_center_verts(del_bm, voro_bm)
+        self.create_cell_faces(del_bm, voro_bm, points, center_verts)
+
+        self.add_data_layers(voro_bm, points)
 
         return voro_bm
 

@@ -28,6 +28,7 @@ import bpy
 from bpy_types import Operator
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty
 from mathutils import Vector
+from .props import VoronoiToolProps
 from .triangulator import Triangulator, InputPoint
 
 
@@ -73,90 +74,11 @@ def get_points_from_particles(context):
     return points
 
 
-class AddVoronoiCells(Operator):
+class AddVoronoiCells(VoronoiToolProps, Operator):
     """Generate Voronoi cells on a surface."""
     bl_idname = 'mesh.voronoi_add'
     bl_label = 'Add Voronoi Cells'
     bl_options = {'UNDO', 'REGISTER'}
-
-    #
-    # Input settings
-
-    use_vertex_sources : BoolProperty(
-        name="Use Mesh Sources",
-        description="Use vertices from selected objects as input points",
-        default=True,
-        )
-
-    use_particle_sources : BoolProperty(
-        name="Use Particle Sources",
-        description="Use particles from selected objects as input points",
-        default=False,
-        )
-
-    bounds_mode : EnumProperty(
-        name="Bounds Mode",
-        description="Bounds behavior mode",
-        items={
-            ('NONE', "None", "Use all points"),
-            ('LIMIT', "Limit", "Use only points within limits"),
-            ('REPEAT', "Repeat", "Repeat points outside bounds"),
-            },
-        default='NONE',
-        )
-
-    bounds_min : FloatVectorProperty(
-        name="Bounds Minimum",
-        description="Minimum bounds value",
-        size=2,
-        default=(0.0, 0.0),
-        )
-
-    bounds_max : FloatVectorProperty(
-        name="Bounds Maximum",
-        description="Maximum bounds value",
-        size=2,
-        default=(1.0, 1.0),
-        )
-
-    #
-    # Output settings
-
-    output_graph : EnumProperty(
-        name="Output Graph",
-        description="Type of graph to generate from point data",
-        items={
-            ('VORONOI', "Voronoi", "Divides space into cells around the closest point"),
-            ('DELAUNAY', "Delaunay", "Triangulation with maximised angles"),
-            },
-        default='DELAUNAY',
-        )
-
-    output_uv_layers : EnumProperty(
-        name="Output UV Layers",
-        description="UV Layers to generate in the output mesh",
-        items={
-            ('POLYGON', "Polygon", "Each polygon filling out UV space (-1..1)"),
-            ('BOUNDS', "Bounds", "Position within the input bounds (Local space coordinates if bounds are disabled)"),
-            ('CIRCUM_CIRCLE', "Circum Circle", "Position within the circumscribed circle of the triangle (Delaunay only)"),
-            ('CELL_CENTERED', "Cell Centered", "Local space coordinates with cell center at origin (Voronoi only)"),
-            ('EDGE_DISTANCE', "Edge Distance", "Local space distance from the cell edge (Voronoi only, needs triangulated cells)"),
-            },
-        default={'POLYGON'},
-        options={'ENUM_FLAG'},
-        )
-
-    #
-    # Delaunay specific settings
-
-    #
-    # Voronoi specific settings
-
-    triangulate_cells : BoolProperty(
-        name="Triangulate Cells",
-        description="Create triangle fans for Voronoi cells instead of ngons",
-        default=False,
-        )
 
     #
     # Debug settings
