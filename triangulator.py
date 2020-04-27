@@ -28,6 +28,7 @@ import bpy
 import bmesh
 import math
 from mathutils import Matrix, Vector
+from sys import float_info
 from . import props
 
 """
@@ -136,9 +137,11 @@ class Triangulator:
     """
     triangulate_cells = False
 
-    def __init__(self, uv_layers=set(), triangulate_cells=False):
+    def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
+        self.bounds_min = bounds_min
+        self.bounds_max = bounds_max
 
     """
     Set up object ID block data, such as vertex groups.
@@ -317,9 +320,47 @@ class Triangulator:
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
     def add_data_layers(self, bm, points):
+        uv_layer_map = dict()
         for uv_layer_id in self.uv_layers:
             uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
-            bm.loops.layers.uv.new(uv_layer_name)
+            uv_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
+
+        use_minmax = ('POLYGON' in uv_layer_map)
+
+        if self.bounds_min is None or self.bounds_max is None:
+            bounds_loc = Vector((0, 0))
+            bounds_mat = Matrix(((1, 0), (0, 1)))
+        else:
+            extent = Vector(self.bounds_max[:]) - Vector(self.bounds_min[:])
+            bounds_loc = Vector(self.bounds_min[:])
+            bounds_mat = Matrix(((1.0/extent.x if extent.x > degenerate_epsilon else 1, 0), (0, 1.0/extent.y if extent.y > degenerate_epsilon else 1)))
+
+        for face in bm.faces:
+            if use_minmax:
+                xmin = float_info.max
+                ymin = float_info.max
+                xmax = float_info.min
+                ymax = float_info.min
+                for vert in face.verts:
+                    xmin = min(xmin, vert.co.x)
+                    xmax = max(xmax, vert.co.x)
+                    ymin = min(ymin, vert.co.y)
+                    ymax = max(ymax, vert.co.y)
+                scale_x = 1.0/(xmax - xmin) if (xmax - xmin) > degenerate_epsilon else 1.0
+                scale_y = 1.0/(ymax - ymin) if (ymax - ymin) > degenerate_epsilon else 1.0
+                polygon_loc = Vector((xmin, ymin))
+                polygon_mat = Matrix(((scale_x, 0), (0, scale_y)))
+
+            for layer_id, layer in uv_layer_map.items():
+                if layer_id == 'POLYGON':
+                    for loop in face.loops:
+                        loop[layer].uv = polygon_mat @ (loop.vert.co.xy - polygon_loc)
+                elif layer_id == 'BOUNDS':
+                    for loop in face.loops:
+                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+                elif layer_id == 'CIRCUM_CIRCLE':
+                    for loop in face.loops:
+                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
 
     """
     Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
