@@ -34,11 +34,9 @@ output_uv_layers_items = {
     ('CIRCUM_CIRCLE', "Circum Circle", "Position within the circumscribed circle of the triangle (Delaunay only)"),
     ('CELL_CENTERED', "Cell Centered", "Local space coordinates with cell center at origin (Voronoi only)"),
     ('EDGE_DISTANCE', "Edge Distance", "Local space distance from the cell edge (Voronoi only, needs triangulated cells)"),
-}
-
-
-output_data_layers_items = {
-    ('POINT_INDEX', "Point Index", "Contiguous index of input point for vertex (Delaunay) or cell face (Voronoi)"),
+    ('POINT_INDEX', "Point Index", "Contiguous index of input point"),
+    ('POINT_ID', "Point ID", "Unique ID of input point, if available"),
+    ('RANDOM', "Random", "Random value based on the id of the input point"),
 }
 
 
@@ -113,14 +111,6 @@ class VoronoiToolProps():
         description="UV layers to generate in the output mesh",
         items=output_uv_layers_items,
         default={'POLYGON'},
-        options={'ENUM_FLAG'},
-        )
-
-    output_data_layers : EnumProperty(
-        name="Output Data Layers",
-        description="Data layers to generate in the output mesh",
-        items=output_data_layers_items,
-        default={'POINT_INDEX'},
         options={'ENUM_FLAG'},
         )
 

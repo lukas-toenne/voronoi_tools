@@ -28,13 +28,19 @@ import bpy
 import bmesh
 import math
 from mathutils import Matrix, Vector
-from sys import float_info
+from sys import float_info, int_info
+import collections
 from . import props
 
 """
 Input point for the triangulator.
 """
 class InputPoint:
+    """
+    Unique ID for the point.
+    """
+    id : 0
+
     """
     Location of the point in object space.
     """
@@ -51,7 +57,8 @@ class InputPoint:
     """
     type : 'ORIGINAL'
 
-    def __init__(self, co, type):
+    def __init__(self, id, co, type):
+        self.id = id
         self.co = co
         self.type = type
 
@@ -123,6 +130,22 @@ def is_delaunay(verts):
     return M.determinant() <= 0
 
 """
+Pseudo-random deterministic hash from int.
+"""
+def random_hash_from_int(x):
+    x = ((x >> 16) ^ x) * 0x45d9f3b
+    x = ((x >> 16) ^ x) * 0x45d9f3b
+    x = (x >> 16) ^ x
+    return x
+
+"""
+Pseudo-random deterministic uniform 0..1 value from int.
+"""
+def random_uniform_from_int(x):
+    return float(random_hash_from_int(x)) / 0xffffffffffffffff
+
+
+"""
 Utility class for generating a triangle mesh that satisfies the Delaunay condition.
 Voronoi diagrams can be constructed from the Delaunay mesh.
 """
@@ -137,9 +160,8 @@ class Triangulator:
     """
     triangulate_cells = False
 
-    def __init__(self, uv_layers=set(), data_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
+    def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
-        self.data_layers = data_layers
         self.triangulate_cells = triangulate_cells
         self.bounds_min = bounds_min
         self.bounds_max = bounds_max
@@ -320,57 +342,6 @@ class Triangulator:
 
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
-    def add_data_layers(self, bm, points):
-        loop_layer_map = dict()
-        for uv_layer_id in self.uv_layers:
-            uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
-            loop_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
-        for data_layer_id in self.data_layers:
-            data_layer_name = props.find_enum_name(props.output_data_layers_items, data_layer_id)
-            if (data_layer_id == 'POINT_INDEX'):
-                loop_layer_map[data_layer_id] = bm.loops.layers.uv.new(data_layer_name)
-
-        use_minmax = ('POLYGON' in loop_layer_map)
-
-        if self.bounds_min is None or self.bounds_max is None:
-            bounds_loc = Vector((0, 0))
-            bounds_mat = Matrix(((1, 0), (0, 1)))
-        else:
-            extent = Vector(self.bounds_max[:]) - Vector(self.bounds_min[:])
-            bounds_loc = Vector(self.bounds_min[:])
-            bounds_mat = Matrix(((1.0/extent.x if extent.x > degenerate_epsilon else 1, 0), (0, 1.0/extent.y if extent.y > degenerate_epsilon else 1)))
-
-        for face in bm.faces:
-            if use_minmax:
-                # Determine bounds of the polygon
-                xmin = float_info.max
-                ymin = float_info.max
-                xmax = float_info.min
-                ymax = float_info.min
-                for vert in face.verts:
-                    xmin = min(xmin, vert.co.x)
-                    xmax = max(xmax, vert.co.x)
-                    ymin = min(ymin, vert.co.y)
-                    ymax = max(ymax, vert.co.y)
-                scale_x = 1.0/(xmax - xmin) if (xmax - xmin) > degenerate_epsilon else 1.0
-                scale_y = 1.0/(ymax - ymin) if (ymax - ymin) > degenerate_epsilon else 1.0
-                polygon_loc = Vector((xmin, ymin))
-                polygon_mat = Matrix(((scale_x, 0), (0, scale_y)))
-
-            for layer_id, layer in loop_layer_map.items():
-                if layer_id == 'POLYGON':
-                    for loop in face.loops:
-                        loop[layer].uv = polygon_mat @ (loop.vert.co.xy - polygon_loc)
-                elif layer_id == 'BOUNDS':
-                    for loop in face.loops:
-                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
-                elif layer_id == 'CIRCUM_CIRCLE':
-                    for loop in face.loops:
-                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
-                elif layer_id == 'POINT_INDEX':
-                    for loop in face.loops:
-                        loop[layer].uv = Vector((, 0))
-
     """
     Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
     If prune is True, redundant mesh elements resulting from repetition will be removed.
@@ -385,7 +356,7 @@ class Triangulator:
         if prune:
             self.prune_duplicate_faces(del_bm, points)
 
-        self.add_data_layers(del_bm, points)
+        self.add_data_layers(del_bm, points, graph_type='DELAUNAY')
 
         return del_bm
 
@@ -478,8 +449,6 @@ class Triangulator:
     The del_bm mesh must be a valid Delaunay triangulation.
     """
     def construct_voronoi(self, points, del_bm):
-        import collections
-
         del_bm.verts.index_update()
         del_bm.faces.index_update()
 
@@ -487,9 +456,76 @@ class Triangulator:
         center_verts = self.create_cell_center_verts(del_bm, voro_bm)
         self.create_cell_faces(del_bm, voro_bm, points, center_verts)
 
-        self.add_data_layers(voro_bm, points)
+        self.add_data_layers(voro_bm, points, graph_type='VORONOI')
 
         return voro_bm
+
+
+    def add_data_layers(self, bm, points, graph_type):
+        if graph_type == 'DELAUNAY':
+            bm.verts.index_update()
+            get_point_index_from_loop = lambda loop: loop.vert.index
+        elif graph_type == 'VORONOI':
+            bm.faces.index_update()
+            get_point_index_from_loop = lambda loop: loop.face.index
+        else:
+            raise Exception("Invalid graph type {}".format(graph_type))
+
+        uv_layer_map = dict()
+        for uv_layer_id in self.uv_layers:
+            uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
+            uv_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
+
+        use_minmax = ('POLYGON' in uv_layer_map)
+
+        if self.bounds_min is None or self.bounds_max is None:
+            bounds_loc = Vector((0, 0))
+            bounds_mat = Matrix(((1, 0), (0, 1)))
+        else:
+            extent = Vector(self.bounds_max[:]) - Vector(self.bounds_min[:])
+            bounds_loc = Vector(self.bounds_min[:])
+            bounds_mat = Matrix(((1.0/extent.x if extent.x > degenerate_epsilon else 1, 0), (0, 1.0/extent.y if extent.y > degenerate_epsilon else 1)))
+
+        for face in bm.faces:
+            if use_minmax:
+                # Determine bounds of the polygon
+                xmin = float_info.max
+                ymin = float_info.max
+                xmax = float_info.min
+                ymax = float_info.min
+                for vert in face.verts:
+                    xmin = min(xmin, vert.co.x)
+                    xmax = max(xmax, vert.co.x)
+                    ymin = min(ymin, vert.co.y)
+                    ymax = max(ymax, vert.co.y)
+                scale_x = 1.0/(xmax - xmin) if (xmax - xmin) > degenerate_epsilon else 1.0
+                scale_y = 1.0/(ymax - ymin) if (ymax - ymin) > degenerate_epsilon else 1.0
+                polygon_loc = Vector((xmin, ymin))
+                polygon_mat = Matrix(((scale_x, 0), (0, scale_y)))
+
+            for layer_id, layer in uv_layer_map.items():
+                if layer_id == 'POLYGON':
+                    for loop in face.loops:
+                        loop[layer].uv = polygon_mat @ (loop.vert.co.xy - polygon_loc)
+                elif layer_id == 'BOUNDS':
+                    for loop in face.loops:
+                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+                elif layer_id == 'CIRCUM_CIRCLE':
+                    for loop in face.loops:
+                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+                elif layer_id == 'POINT_INDEX':
+                    for loop in face.loops:
+                        point_index = get_point_index_from_loop(loop)
+                        loop[layer].uv = Vector((point_index, 0))
+                elif layer_id == 'POINT_ID':
+                    for loop in face.loops:
+                        point = points[get_point_index_from_loop(loop)]
+                        loop[layer].uv = Vector((point.id, 0))
+                elif layer_id == 'RANDOM':
+                    for loop in face.loops:
+                        point = points[get_point_index_from_loop(loop)]
+                        loop[layer].uv = Vector((random_uniform_from_int(point.id), 0))
+
 
     """
     Debug function for recording intermediate mesh results.

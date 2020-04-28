@@ -48,7 +48,7 @@ def get_points_from_meshes(context):
 
         mesh_from_eval = source_eval.to_mesh()
         if mesh_from_eval:
-            points.extend([InputPoint(mat @ v.co, 'ORIGINAL') for v in mesh_from_eval.vertices])
+            points.extend([InputPoint(i, mat @ v.co, 'ORIGINAL') for i, v in enumerate(mesh_from_eval.vertices)])
 
     return points
 
@@ -69,7 +69,7 @@ def get_points_from_particles(context):
         mat = matinv
 
         for psys in source_eval.particle_systems:
-            points.extend([InputPoint(mat @ p.location, 'ORIGINAL') for p in psys.particles])
+            points.extend([InputPoint(i, mat @ p.location, 'ORIGINAL') for i, p in enumerate(psys.particles)])
 
     return points
 
@@ -130,7 +130,7 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
                     type = 'REPEAT_NEG'
                 elif offset_y > 0:
                     type = 'REPEAT_POS'
-                return [InputPoint(p.co + Vector((offset_x * dx, offset_y * dy, 0)), type) for p in points]
+                return [InputPoint(p.id, p.co + Vector((offset_x * dx, offset_y * dy, 0)), type) for p in points]
             points[:] = offset_points(-1, -1) + offset_points(0, -1) + offset_points(1, -1) + offset_points(-1, 0) + offset_points(0, 0) + offset_points(1, 0) + offset_points(-1, 1) + offset_points(0, 1) + offset_points(1, 1)
 
     def generate_mesh(self, context):
@@ -147,7 +147,6 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
 
         triangulator = Triangulator(
             uv_layers=self.output_uv_layers,
-            data_layers=self.data_layers,
             triangulate_cells=self.triangulate_cells,
             bounds_min=None if self.bounds_mode == 'NONE' else self.bounds_min,
             bounds_max=None if self.bounds_mode == 'NONE' else self.bounds_max,
