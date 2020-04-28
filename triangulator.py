@@ -160,11 +160,50 @@ class Triangulator:
     """
     triangulate_cells = False
 
+    """
+    Lower bounds of the point set.
+    Must be a tuple of two floats, or None if unbounded.
+    """
+    bounds_min = None
+
+    """
+    Upper bounds of the point set.
+    Must be a tuple of two floats, or None if unbounded.
+    """
+    bounds_max = None
+
+    """
+    Input point set, must be a list of InputPoint.
+    """
+    points = None
+
+    """
+    BMesh containing the Delaunay triangulation of input points.
+    """
+    triangulation_bm = None
+
+    """
+    BMesh containing the Voronoi graph for the triangulation.
+    """
+    voronoi_bm = None
+
     def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
         self.bounds_min = bounds_min
         self.bounds_max = bounds_max
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.points = None
+        if self.triangulation_bm:
+            self.triangulation_bm.free()
+            self.triangulation_bm = None
+        if self.voronoi_bm:
+            self.voronoi_bm.free()
+            self.voronoi_bm = None
 
     """
     Set up object ID block data, such as vertex groups.
@@ -185,7 +224,9 @@ class Triangulator:
     """
     Sort the points list by distance from the center in preparation for the sweephull algorithm.
     """
-    def radial_sort_points(self, points):
+    def _radial_sort_points(self):
+        points = self.points
+
         center = Vector((0, 0, 0))
         for pt in points:
             center += pt.co
@@ -195,11 +236,14 @@ class Triangulator:
     """
     Add vertices to the Delaunay triangulation mesh based on input points.
     """
-    def add_point_vertices(self, bm, points):
+    def _add_point_vertices(self):
+        bm = self.triangulation_bm
+
+        points = self.points
         if len(points) < 3:
             return
 
-        self.radial_sort_points(points)
+        self._radial_sort_points()
 
         dvert_lay = bm.verts.layers.deform.verify()
 
@@ -219,7 +263,9 @@ class Triangulator:
     Construct a triangle mesh using the sweephull method.
     The resulting mesh is non-overlapping, but does not satisfy the Delaunay condition yet.
     """
-    def do_sweephull(self, bm, points):
+    def _do_sweephull(self):
+        points = self.points
+        bm = self.triangulation_bm
         if len(points) < 3:
             return
 
@@ -288,8 +334,8 @@ class Triangulator:
     Iteratively apply the edge flipping method to ensure the Delaunay condition is satisfied for each edge.
     The input mesh must be non-overlapping.
     """
-    def do_edgeflip(self, bm):
-        import collections
+    def _do_edgeflip(self):
+        bm = self.triangulation_bm
 
         flipstack = collections.deque(maxlen=len(bm.edges))
         for edge in bm.edges:
@@ -323,7 +369,9 @@ class Triangulator:
     Find and delete duplicate faces in the Delaunay triangulation.
     Faces are duplicate if any vertex is in the negative repetition or all vertices are in the position repetition.
     """
-    def prune_duplicate_faces(self, bm, points):
+    def _prune_duplicate_faces(self):
+        points = self.points
+        bm = self.triangulation_bm
         bm.verts.index_update()
 
         duplicate_faces = []
@@ -347,25 +395,29 @@ class Triangulator:
     If prune is True, redundant mesh elements resulting from repetition will be removed.
     """
     def construct_delaunay(self, points, prune):
-        del_bm = bmesh.new()
+        self.points = points
 
-        self.add_point_vertices(del_bm, points)
-        self.do_sweephull(del_bm, points)
-        self.do_edgeflip(del_bm)
+        self.triangulation_bm = bmesh.new()
+        self._add_point_vertices()
+        self._do_sweephull()
+        self._do_edgeflip()
 
         if prune:
-            self.prune_duplicate_faces(del_bm, points)
+            self._prune_duplicate_faces()
 
-        self.add_data_layers(del_bm, points, graph_type='DELAUNAY')
+        self._add_data_layers(self.triangulation_bm)
 
-        return del_bm
+        return self.triangulation_bm
 
 
     """
     Add vertices for circumcenters of the Delaunay triangles.
     Returns a list with a vertex for each face (can be None if the face is degenerate).
     """
-    def create_cell_center_verts(self, del_bm, voro_bm):
+    def _create_cell_center_verts(self):
+        del_bm = self.triangulation_bm
+        voro_bm = self.voronoi_bm
+
         center_verts = collections.deque(maxlen=len(del_bm.faces))
 
         for face in del_bm.faces:
@@ -393,7 +445,11 @@ class Triangulator:
     """
     Creates a face for each cell of the Voronoi graph.
     """
-    def create_cell_faces(self, del_bm, voro_bm, points, center_verts):
+    def _create_cell_faces(self, center_verts):
+        points = self.points
+        del_bm = self.triangulation_bm
+        voro_bm = self.voronoi_bm
+
         voro_loop = collections.deque()
         for vert in del_bm.verts:
             # Avoid duplicate faces
@@ -448,28 +504,35 @@ class Triangulator:
     Constructs a Voronoi mesh based on input points a triangulated mesh.
     The del_bm mesh must be a valid Delaunay triangulation.
     """
-    def construct_voronoi(self, points, del_bm):
+    def construct_voronoi(self):
+        del_bm = self.triangulation_bm
+        if self.points is None or del_bm is None:
+            raise Exception("Triangulation must be performed before creating Voronoi mesh")
+
         del_bm.verts.index_update()
         del_bm.faces.index_update()
 
-        voro_bm = bmesh.new()
-        center_verts = self.create_cell_center_verts(del_bm, voro_bm)
-        self.create_cell_faces(del_bm, voro_bm, points, center_verts)
+        self.voronoi_bm = bmesh.new()
+        center_verts = self._create_cell_center_verts()
+        self._create_cell_faces(center_verts)
 
-        self.add_data_layers(voro_bm, points, graph_type='VORONOI')
+        self._add_data_layers(self.voronoi_bm)
 
-        return voro_bm
+        return self.voronoi_bm
 
 
-    def add_data_layers(self, bm, points, graph_type):
-        if graph_type == 'DELAUNAY':
+    def _add_data_layers(self, bm):
+        points = self.points
+
+        if bm == self.triangulation_bm:
+            # Delaunay triangulation mesh
             bm.verts.index_update()
             get_point_index_from_loop = lambda loop: loop.vert.index
-        elif graph_type == 'VORONOI':
+        elif bm == self.voronoi_bm:
             bm.faces.index_update()
             get_point_index_from_loop = lambda loop: loop.face.index
         else:
-            raise Exception("Invalid graph type {}".format(graph_type))
+            raise Exception("Invalid bmesh")
 
         uv_layer_map = dict()
         for uv_layer_id in self.uv_layers:

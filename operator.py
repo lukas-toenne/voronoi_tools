@@ -145,31 +145,25 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
         self.project_points(points)
         self.apply_bounds(points)
 
-        triangulator = Triangulator(
-            uv_layers=self.output_uv_layers,
-            triangulate_cells=self.triangulate_cells,
-            bounds_min=None if self.bounds_mode == 'NONE' else self.bounds_min,
-            bounds_max=None if self.bounds_mode == 'NONE' else self.bounds_max,
-            )
+        with Triangulator(
+                uv_layers=self.output_uv_layers,
+                triangulate_cells=self.triangulate_cells,
+                bounds_min=None if self.bounds_mode == 'NONE' else self.bounds_min,
+                bounds_max=None if self.bounds_mode == 'NONE' else self.bounds_max,
+                ) as triangulator:
+            triangulator.prepare_object(obj)
 
-        triangulator.prepare_object(obj)
+            if self.generate_debug_meshes:
+                self.setup_debugging(context, obj, triangulator)
 
-        if self.generate_debug_meshes:
-            self.setup_debugging(context, obj, triangulator)
+            if self.output_graph == 'DELAUNAY':
+                triangulator.construct_delaunay(points, prune=True)
+                triangulator.triangulation_bm.to_mesh(obj.data)
 
-        if self.output_graph == 'DELAUNAY':
-            del_bm = triangulator.construct_delaunay(points, prune=True)
-
-            del_bm.to_mesh(obj.data)
-            del_bm.free()
-
-        elif self.output_graph == 'VORONOI':
-            del_bm = triangulator.construct_delaunay(points, prune=False)
-            voro_bm = triangulator.construct_voronoi(points, del_bm)
-
-            voro_bm.to_mesh(obj.data)
-            del_bm.free()
-            voro_bm.free()
+            elif self.output_graph == 'VORONOI':
+                triangulator.construct_delaunay(points, prune=False)
+                triangulator.construct_voronoi()
+                triangulator.voronoi_bm.to_mesh(obj.data)
 
         obj.data.update()
 
