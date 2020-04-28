@@ -147,6 +147,7 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
 
         triangulator = Triangulator(
             uv_layers=self.output_uv_layers,
+            data_layers=self.data_layers,
             triangulate_cells=self.triangulate_cells,
             bounds_min=None if self.bounds_mode == 'NONE' else self.bounds_min,
             bounds_max=None if self.bounds_mode == 'NONE' else self.bounds_max,

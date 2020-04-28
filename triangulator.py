@@ -137,8 +137,9 @@ class Triangulator:
     """
     triangulate_cells = False
 
-    def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
+    def __init__(self, uv_layers=set(), data_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
+        self.data_layers = data_layers
         self.triangulate_cells = triangulate_cells
         self.bounds_min = bounds_min
         self.bounds_max = bounds_max
@@ -320,12 +321,16 @@ class Triangulator:
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
     def add_data_layers(self, bm, points):
-        uv_layer_map = dict()
+        loop_layer_map = dict()
         for uv_layer_id in self.uv_layers:
             uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
-            uv_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
+            loop_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
+        for data_layer_id in self.data_layers:
+            data_layer_name = props.find_enum_name(props.output_data_layers_items, data_layer_id)
+            if (data_layer_id == 'POINT_INDEX'):
+                loop_layer_map[data_layer_id] = bm.loops.layers.uv.new(data_layer_name)
 
-        use_minmax = ('POLYGON' in uv_layer_map)
+        use_minmax = ('POLYGON' in loop_layer_map)
 
         if self.bounds_min is None or self.bounds_max is None:
             bounds_loc = Vector((0, 0))
@@ -337,6 +342,7 @@ class Triangulator:
 
         for face in bm.faces:
             if use_minmax:
+                # Determine bounds of the polygon
                 xmin = float_info.max
                 ymin = float_info.max
                 xmax = float_info.min
@@ -351,7 +357,7 @@ class Triangulator:
                 polygon_loc = Vector((xmin, ymin))
                 polygon_mat = Matrix(((scale_x, 0), (0, scale_y)))
 
-            for layer_id, layer in uv_layer_map.items():
+            for layer_id, layer in loop_layer_map.items():
                 if layer_id == 'POLYGON':
                     for loop in face.loops:
                         loop[layer].uv = polygon_mat @ (loop.vert.co.xy - polygon_loc)
@@ -361,6 +367,9 @@ class Triangulator:
                 elif layer_id == 'CIRCUM_CIRCLE':
                     for loop in face.loops:
                         loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+                elif layer_id == 'POINT_INDEX':
+                    for loop in face.loops:
+                        loop[layer].uv = Vector((, 0))
 
     """
     Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
