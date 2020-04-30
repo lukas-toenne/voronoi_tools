@@ -136,13 +136,13 @@ def random_hash_from_int(x):
     x = ((x >> 16) ^ x) * 0x45d9f3b
     x = ((x >> 16) ^ x) * 0x45d9f3b
     x = (x >> 16) ^ x
-    return x
+    return x & 0xffffffff
 
 """
 Pseudo-random deterministic uniform 0..1 value from int.
 """
 def random_uniform_from_int(x):
-    return float(random_hash_from_int(x)) / 0xffffffffffffffff
+    return float(random_hash_from_int(x)) / 0xffffffff
 
 
 """
