@@ -39,12 +39,17 @@ class InputPoint:
     """
     Unique ID for the point.
     """
-    id : 0
+    id = 0
+
+    """
+    Index of the point.
+    """
+    index = 0
 
     """
     Location of the point in object space.
     """
-    co : Vector((0, 0, 0))
+    co = Vector((0, 0, 0))
 
     """
     One of:
@@ -55,7 +60,7 @@ class InputPoint:
     Only edges between original points and original and positive points
     will be kept, all other are removed.
     """
-    type : 'ORIGINAL'
+    type = 'ORIGINAL'
 
     def __init__(self, id, co, type):
         self.id = id
@@ -396,6 +401,9 @@ class Triangulator:
     """
     def construct_delaunay(self, points, prune):
         self.points = points
+        # Assign point indices before sorting
+        for i, p in enumerate(points):
+            p.index = i
 
         self.triangulation_bm = bmesh.new()
         self._add_point_vertices()
@@ -578,8 +586,8 @@ class Triangulator:
                         loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
                 elif layer_id == 'POINT_INDEX':
                     for loop in face.loops:
-                        point_index = get_point_index_from_loop(loop)
-                        loop[layer].uv = Vector((point_index, 0))
+                        point = points[get_point_index_from_loop(loop)]
+                        loop[layer].uv = Vector((point.index, 0))
                 elif layer_id == 'POINT_ID':
                     for loop in face.loops:
                         point = points[get_point_index_from_loop(loop)]
