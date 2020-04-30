@@ -345,7 +345,7 @@ class Triangulator:
         flipstack = collections.deque(maxlen=len(bm.edges))
         for edge in bm.edges:
             if not edge.is_boundary:
-                flipstack.append(edge)
+                flipstack.appendleft(edge)
                 edge.tag = True
 
         while flipstack:
