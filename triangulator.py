@@ -67,7 +67,7 @@ class InputPoint:
         self.co = co
         self.type = type
 
-degenerate_epsilon = 1.0e-9
+degenerate_epsilon = 1.0e-6
 
 """
 True if vertices are colinear or coinciding within the epsilon value.
