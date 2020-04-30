@@ -413,7 +413,7 @@ class Triangulator:
         if prune:
             self._prune_duplicate_faces()
 
-        self._add_data_layers(self.triangulation_bm)
+        self._add_data_layers(self.triangulation_bm, 'DELAUNAY')
 
         return self.triangulation_bm
 
@@ -524,23 +524,23 @@ class Triangulator:
         center_verts = self._create_cell_center_verts()
         self._create_cell_faces(center_verts)
 
-        self._add_data_layers(self.voronoi_bm)
+        self._add_data_layers(self.voronoi_bm, 'VORONOI')
 
         return self.voronoi_bm
 
 
-    def _add_data_layers(self, bm):
+    def _add_data_layers(self, bm, graph_type):
         points = self.points
 
-        if bm == self.triangulation_bm:
+        if graph_type == 'DELAUNAY':
             # Delaunay triangulation mesh
             bm.verts.index_update()
             get_point_index_from_loop = lambda loop: loop.vert.index
-        elif bm == self.voronoi_bm:
+        elif graph_type == 'VORONOI':
             bm.faces.index_update()
             get_point_index_from_loop = lambda loop: loop.face.index
         else:
-            raise Exception("Invalid bmesh")
+            raise Exception("Invalid graph type {}".format(graph_type))
 
         uv_layer_map = dict()
         for uv_layer_id in self.uv_layers:

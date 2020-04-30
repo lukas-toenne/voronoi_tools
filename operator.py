@@ -187,9 +187,22 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
 
         # Implementation of intermediate mesh debugging
         def add_debug_mesh(bm, name):
+            # Make a copy to avoid modifying the intermediate mesh
+            debug_bm = bm.copy()
+
+            if name == "SweepHull":
+                triangulator._add_data_layers(debug_bm, graph_type='DELAUNAY')
+            elif name == "EdgeFlip":
+                triangulator._add_data_layers(debug_bm, graph_type='DELAUNAY')
+            elif name == "VoronoiMesh":
+                triangulator._add_data_layers(debug_bm, graph_type='VORONOI')
+            else:
+                raise Exception("Unknown debug name {}, cannot determine graph type".format(name))
+
             # Store current bmesh state in a new mesh datablock
             debug_mesh = bpy.data.meshes.new("VoronoiToolsDebug.{}".format(name))
-            bm.to_mesh(debug_mesh)
+            debug_bm.to_mesh(debug_mesh)
+            debug_bm.free()
             # Assign material
             mat = bpy.data.materials.get("VoronoiToolsDebug.{}".format(name))
             if mat is None:
