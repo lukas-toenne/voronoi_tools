@@ -536,9 +536,16 @@ class Triangulator:
             # Delaunay triangulation mesh
             bm.verts.index_update()
             get_point_index_from_loop = lambda loop: loop.vert.index
+            def face_random_value(face):
+                r = 0
+                for loop in face.loops:
+                    r ^= random_hash_from_int(points[loop.vert.index].id)
+                return random_uniform_from_int(r)
+            get_face_random_value = face_random_value
         elif graph_type == 'VORONOI':
             bm.faces.index_update()
             get_point_index_from_loop = lambda loop: loop.face.index
+            get_face_random_value = lambda face: random_uniform_from_int(points[face.index].id)
         else:
             raise Exception("Invalid graph type {}".format(graph_type))
 
@@ -593,9 +600,9 @@ class Triangulator:
                         point = points[get_point_index_from_loop(loop)]
                         loop[layer].uv = Vector((point.id, 0))
                 elif layer_id == 'RANDOM':
+                    r = get_face_random_value(face)
                     for loop in face.loops:
-                        point = points[get_point_index_from_loop(loop)]
-                        loop[layer].uv = Vector((random_uniform_from_int(point.id), 0))
+                        loop[layer].uv = Vector((r, 0))
 
 
     """
