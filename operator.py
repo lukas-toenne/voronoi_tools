@@ -217,6 +217,13 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
             debug_obj.keyframe_insert("hide_viewport", frame=(frame))
             debug_obj.hide_viewport = True
             debug_obj.keyframe_insert("hide_viewport", frame=(frame + 1))
+
+            debug_obj.hide_render = True
+            debug_obj.keyframe_insert("hide_render", frame=(frame - 1))
+            debug_obj.hide_render = False
+            debug_obj.keyframe_insert("hide_render", frame=(frame))
+            debug_obj.hide_render = True
+            debug_obj.keyframe_insert("hide_render", frame=(frame + 1))
             # Set scene frame range to cover all debug objects
             scene.frame_start = 1
             scene.frame_end = frame
