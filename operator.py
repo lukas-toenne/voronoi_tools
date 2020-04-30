@@ -190,6 +190,11 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
             # Store current bmesh state in a new mesh datablock
             debug_mesh = bpy.data.meshes.new("VoronoiToolsDebug.{}".format(name))
             bm.to_mesh(debug_mesh)
+            # Assign material
+            mat = bpy.data.materials.get("VoronoiToolsDebug.{}".format(name))
+            if mat is None:
+                mat = bpy.data.materials.new("VoronoiToolsDebug.{}".format(name))
+            debug_mesh.materials.append(mat)
             debug_mesh.update()
 
             # Object to link the mesh in the scene
