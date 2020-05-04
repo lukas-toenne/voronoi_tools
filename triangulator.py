@@ -192,6 +192,12 @@ class Triangulator:
     """
     voronoi_bm = None
 
+    """
+    List of circumcircles of the Delaunay triangulation.
+    Each entry is a tuple (center vector, radius).
+    """
+    circumcircles = None
+
     def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
@@ -209,6 +215,7 @@ class Triangulator:
         if self.voronoi_bm:
             self.voronoi_bm.free()
             self.voronoi_bm = None
+        self.circumcircles = None
 
     """
     Set up object ID block data, such as vertex groups.
@@ -419,14 +426,14 @@ class Triangulator:
 
 
     """
-    Add vertices for circumcenters of the Delaunay triangles.
-    Returns a list with a vertex for each face (can be None if the face is degenerate).
+    Compute the circumcircles for all triangles.
     """
-    def _create_cell_center_verts(self):
-        del_bm = self.triangulation_bm
-        voro_bm = self.voronoi_bm
+    def _ensure_circumcircles(self):
+        if self.circumcircles is not None:
+            return
 
-        center_verts = collections.deque(maxlen=len(del_bm.faces))
+        del_bm = self.triangulation_bm
+        self.circumcircles = collections.deque(maxlen=len(del_bm.faces))
 
         for face in del_bm.faces:
             a = face.verts[0].co
@@ -442,21 +449,27 @@ class Triangulator:
             r0 = Matrix(((a.x, a.y, La), (b.x, b.y, Lb), (c.x, c.y, Lc))).determinant()
             if norm != 0:
                 co = Vector((Sx, Sy, 0)) / norm
-                # r0 = math.sqrt(r0/norm + co.length_squared)
+                r = math.sqrt(abs(r0)/norm + co.length_squared)
 
-                center_verts.append(voro_bm.verts.new(co))
+                self.circumcircles.append((co, r))
             else:
-                center_verts.append(None)
-
-        return center_verts
+                self.circumcircles.append(None)
 
     """
     Creates a face for each cell of the Voronoi graph.
     """
-    def _create_cell_faces(self, center_verts):
+    def _create_cell_faces(self):
         points = self.points
         del_bm = self.triangulation_bm
         voro_bm = self.voronoi_bm
+
+        # Create a vertex for each triangle circumcircle
+        center_verts = collections.deque(maxlen=len(self.circumcircles))
+        for circle in self.circumcircles:
+            if circle:
+                center_verts.append(voro_bm.verts.new(circle[0]))
+            else:
+                center_verts.append(None)
 
         voro_loop = collections.deque()
         for vert in del_bm.verts:
@@ -519,10 +532,10 @@ class Triangulator:
 
         del_bm.verts.index_update()
         del_bm.faces.index_update()
+        self._ensure_circumcircles()
 
         self.voronoi_bm = bmesh.new()
-        center_verts = self._create_cell_center_verts()
-        self._create_cell_faces(center_verts)
+        self._create_cell_faces()
 
         self._add_data_layers(self.voronoi_bm, 'VORONOI')
 
@@ -535,17 +548,29 @@ class Triangulator:
         if graph_type == 'DELAUNAY':
             # Delaunay triangulation mesh
             bm.verts.index_update()
+            bm.faces.index_update()
+
             get_point_index_from_loop = lambda loop: loop.vert.index
+
             def face_random_value(face):
                 r = 0
                 for loop in face.loops:
                     r ^= random_hash_from_int(points[loop.vert.index].id)
                 return random_uniform_from_int(r)
             get_face_random_value = face_random_value
+
+            self._ensure_circumcircles()
+            get_circumcircle_from_face = lambda face: self.circumcircles[face.index]
+
         elif graph_type == 'VORONOI':
             bm.faces.index_update()
+
             get_point_index_from_loop = lambda loop: loop.face.index
+
             get_face_random_value = lambda face: random_uniform_from_int(points[face.index].id)
+
+            get_circumcircle_from_face = None # Undefined, each Voronoi cell vertex has different circumcircle
+
         else:
             raise Exception("Invalid graph type {}".format(graph_type))
 
@@ -589,8 +614,10 @@ class Triangulator:
                     for loop in face.loops:
                         loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
                 elif layer_id == 'CIRCUM_CIRCLE':
-                    for loop in face.loops:
-                        loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+                    if get_circumcircle_from_face:
+                        center = get_circumcircle_from_face(face)[0]
+                        for loop in face.loops:
+                            loop[layer].uv = (loop.vert.co - center).xy
                 elif layer_id == 'POINT_INDEX':
                     for loop in face.loops:
                         point = points[get_point_index_from_loop(loop)]
