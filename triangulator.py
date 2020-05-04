@@ -449,7 +449,7 @@ class Triangulator:
             r0 = Matrix(((a.x, a.y, La), (b.x, b.y, Lb), (c.x, c.y, Lc))).determinant()
             if norm != 0:
                 co = Vector((Sx, Sy, 0)) / norm
-                r = math.sqrt(abs(r0)/norm + co.length_squared)
+                r = math.sqrt(abs(r0/norm) + co.length_squared)
 
                 self.circumcircles.append((co, r))
             else:
@@ -550,8 +550,10 @@ class Triangulator:
             bm.verts.index_update()
             bm.faces.index_update()
 
+            # Vertices are generated from input points
             get_point_index_from_loop = lambda loop: loop.vert.index
 
+            # Combine per-point random value for unique per-face hash
             def face_random_value(face):
                 r = 0
                 for loop in face.loops:
@@ -559,17 +561,24 @@ class Triangulator:
                 return random_uniform_from_int(r)
             get_face_random_value = face_random_value
 
+            # Cell center is the center of the circum-circle
             self._ensure_circumcircles()
-            get_circumcircle_from_face = lambda face: self.circumcircles[face.index]
+            def circumcircle_center(face):
+                circle = self.circumcircles[face.index]
+                return Vector((0, 0)) if circle is None else circle[0].xy
+            get_cell_center_from_face = circumcircle_center
 
         elif graph_type == 'VORONOI':
             bm.faces.index_update()
 
+            # One face created for each input point
             get_point_index_from_loop = lambda loop: loop.face.index
 
+            # Face maps to input point for unique id
             get_face_random_value = lambda face: random_uniform_from_int(points[face.index].id)
 
-            get_circumcircle_from_face = None # Undefined, each Voronoi cell vertex has different circumcircle
+            # Cell center is the input point
+            get_cell_center_from_face = lambda face: points[face.index].co.xy
 
         else:
             raise Exception("Invalid graph type {}".format(graph_type))
@@ -613,11 +622,13 @@ class Triangulator:
                 elif layer_id == 'BOUNDS':
                     for loop in face.loops:
                         loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
-                elif layer_id == 'CIRCUM_CIRCLE':
-                    if get_circumcircle_from_face:
-                        center = get_circumcircle_from_face(face)[0]
-                        for loop in face.loops:
-                            loop[layer].uv = (loop.vert.co - center).xy
+                elif layer_id == 'CELL_CENTERED':
+                    center = get_cell_center_from_face(face)
+                    for loop in face.loops:
+                        loop[layer].uv = loop.vert.co.xy - center
+                elif layer_id == 'EDGE_DISTANCE':
+                    # TODO
+                    pass
                 elif layer_id == 'POINT_INDEX':
                     for loop in face.loops:
                         point = points[get_point_index_from_loop(loop)]

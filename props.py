@@ -31,8 +31,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProp
 output_uv_layers_items = {
     ('POLYGON', "Polygon", "Each polygon filling out UV space (-1..1)"),
     ('BOUNDS', "Bounds", "Position within the input bounds (Local space coordinates if bounds are disabled)"),
-    ('CIRCUM_CIRCLE', "Circum Circle", "Position within the circumscribed circle of the triangle (Delaunay only)"),
-    ('CELL_CENTERED', "Cell Centered", "Local space coordinates with cell center at origin (Voronoi only)"),
+    ('CELL_CENTERED', "Cell Centered", "Local space coordinates with circum-circle (Delaunay triangles) or cell center (Voronoi) at the origin"),
     ('EDGE_DISTANCE', "Edge Distance", "Local space distance from the cell edge (Voronoi only, needs triangulated cells)"),
     ('POINT_INDEX', "Point Index", "Contiguous index of input point"),
     ('POINT_ID', "Point ID", "Unique ID of input point, if available"),
