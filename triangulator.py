@@ -198,6 +198,12 @@ class Triangulator:
     """
     circumcircles = None
 
+    """
+    Origin and rotation matrix of the edge coordinates for each face.
+    Requires triangulated cells.
+    """
+    edge_coords = None
+
     def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
@@ -403,10 +409,10 @@ class Triangulator:
         bmesh.ops.delete(bm, geom=duplicate_faces, context='FACES')
 
     """
-    Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
-    If prune is True, redundant mesh elements resulting from repetition will be removed.
+    Create base triangulation mesh, used for both final Delaunay output
+    as well as input mesh for Voronoi graph construction.
     """
-    def construct_delaunay(self, points, prune):
+    def _create_triangulation(self, points):
         self.points = points
         # Assign point indices before sorting
         for i, p in enumerate(points):
@@ -417,9 +423,13 @@ class Triangulator:
         self._do_sweephull()
         self._do_edgeflip()
 
-        if prune:
-            self._prune_duplicate_faces()
-
+    """
+    Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
+    """
+    def construct_delaunay(self, points):
+        self._create_triangulation(points)
+        # Remove redundant mesh elements resulting from repetition
+        self._prune_duplicate_faces()
         self._add_data_layers(self.triangulation_bm, 'DELAUNAY')
 
         return self.triangulation_bm
@@ -525,10 +535,9 @@ class Triangulator:
     Constructs a Voronoi mesh based on input points a triangulated mesh.
     The del_bm mesh must be a valid Delaunay triangulation.
     """
-    def construct_voronoi(self):
+    def construct_voronoi(self, points):
+        self._create_triangulation(points)
         del_bm = self.triangulation_bm
-        if self.points is None or del_bm is None:
-            raise Exception("Triangulation must be performed before creating Voronoi mesh")
 
         del_bm.verts.index_update()
         del_bm.faces.index_update()
@@ -626,9 +635,10 @@ class Triangulator:
                     center = get_cell_center_from_face(face)
                     for loop in face.loops:
                         loop[layer].uv = loop.vert.co.xy - center
-                elif layer_id == 'EDGE_DISTANCE':
-                    # TODO
-                    pass
+                elif layer_id == 'EDGE_CENTERED':
+                    edge_loc, edge_mat = self.edge_coords[face.index]
+                    for loop in face.loops:
+                        loop[layer].uv = edge_mat @ (loop.vert.co.xy - edge_loc)
                 elif layer_id == 'POINT_INDEX':
                     for loop in face.loops:
                         point = points[get_point_index_from_loop(loop)]

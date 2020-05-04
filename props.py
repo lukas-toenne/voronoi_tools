@@ -32,7 +32,7 @@ output_uv_layers_items = {
     ('POLYGON', "Polygon", "Each polygon filling out UV space (-1..1)"),
     ('BOUNDS', "Bounds", "Position within the input bounds (Local space coordinates if bounds are disabled)"),
     ('CELL_CENTERED', "Cell Centered", "Local space coordinates with circum-circle (Delaunay triangles) or cell center (Voronoi) at the origin"),
-    ('EDGE_DISTANCE', "Edge Distance", "Local space distance from the cell edge (Voronoi only, needs triangulated cells)"),
+    ('EDGE_CENTERED', "Edge Centered", "Local space distance from the cell edge (needs triangulated cells)"),
     ('POINT_INDEX', "Point Index", "Contiguous index of input point"),
     ('POINT_ID', "Point ID", "Unique ID of input point, if available"),
     ('RANDOM', "Random", "Random value based on the id of the input point"),
@@ -113,14 +113,8 @@ class VoronoiToolProps():
         options={'ENUM_FLAG'},
         )
 
-    #
-    # Delaunay specific settings
-
-    #
-    # Voronoi specific settings
-
     triangulate_cells : BoolProperty(
         name="Triangulate Cells",
-        description="Create triangle fans for Voronoi cells instead of ngons",
+        description="Create triangle fans for cells instead of ngons (needed for edge distance coordinates)",
         default=False,
         )

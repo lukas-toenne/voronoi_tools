@@ -157,13 +157,12 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
                 self.setup_debugging(context, obj, triangulator)
 
             if self.output_graph == 'DELAUNAY':
-                triangulator.construct_delaunay(points, prune=True)
-                triangulator.triangulation_bm.to_mesh(obj.data)
+                bm = triangulator.construct_delaunay(points)
+                bm.to_mesh(obj.data)
 
             elif self.output_graph == 'VORONOI':
-                triangulator.construct_delaunay(points, prune=False)
-                triangulator.construct_voronoi()
-                triangulator.voronoi_bm.to_mesh(obj.data)
+                bm = triangulator.construct_voronoi(points)
+                bm.to_mesh(obj.data)
 
         obj.data.update()
 
