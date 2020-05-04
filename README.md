@@ -34,9 +34,8 @@ The "Add Voronoi Cells" operator generates a Delaunay triangulation or Voronoi m
 
 * _Output UV Layers_: Selection of data to output as UV layers for use in shaders or modifiers.
   * _Bounds_: Position within the input bounds (Local space coordinates if bounds are disabled)
-  * _Circum Circle_: Position within the circumscribed circle of the triangle (Delaunay only)
-  * _Cell Centered_: Local space coordinates with cell center at origin (Voronoi only)
-  * _Edge Distance_: Local space distance from the cell edge (Voronoi only, needs triangulated cells)
+  * _Cell Centered_: Local space coordinates with circum-circle (Delaunay triangles) or cell center (Voronoi) at the origin
+  * _Edge Distance_: Local space distance from the cell edge (Voronoi only, needs triangulated cells).
   * _Point Index_: Contiguous index of input point
   * _Point ID_: Unique ID of input point, if available
   * _Random_: Random value based on the id of the input point
