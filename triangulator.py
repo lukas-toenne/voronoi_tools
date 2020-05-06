@@ -149,6 +149,23 @@ Pseudo-random deterministic uniform 0..1 value from int.
 def random_uniform_from_int(x):
     return float(random_hash_from_int(x)) / 0xffffffff
 
+"""
+Returns origin and scale matrix based on bounds of the polygon
+"""
+def _get_polygon_transform(face):
+    xmin = float_info.max
+    ymin = float_info.max
+    xmax = float_info.min
+    ymax = float_info.min
+    for loop in face.loops:
+        xmin = min(xmin, loop.vert.co.x)
+        xmax = max(xmax, loop.vert.co.x)
+        ymin = min(ymin, loop.vert.co.y)
+        ymax = max(ymax, loop.vert.co.y)
+    scale_x = 1.0/(xmax - xmin) if (xmax - xmin) > degenerate_epsilon else 1.0
+    scale_y = 1.0/(ymax - ymin) if (ymax - ymin) > degenerate_epsilon else 1.0
+    return Vector((xmin, ymin)), Matrix(((scale_x, 0), (0, scale_y)))
+
 
 """
 Utility class for generating a triangle mesh that satisfies the Delaunay condition.
@@ -198,12 +215,6 @@ class Triangulator:
     """
     circumcircles = None
 
-    """
-    Origin and rotation matrix of the edge coordinates for each face.
-    Requires triangulated cells.
-    """
-    edge_coords = None
-
     def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
@@ -215,13 +226,13 @@ class Triangulator:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.points = None
+        self.circumcircles = None
         if self.triangulation_bm:
             self.triangulation_bm.free()
             self.triangulation_bm = None
         if self.voronoi_bm:
             self.voronoi_bm.free()
             self.voronoi_bm = None
-        self.circumcircles = None
 
     """
     Set up object ID block data, such as vertex groups.
@@ -424,18 +435,6 @@ class Triangulator:
         self._do_edgeflip()
 
     """
-    Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
-    """
-    def construct_delaunay(self, points):
-        self._create_triangulation(points)
-        # Remove redundant mesh elements resulting from repetition
-        self._prune_duplicate_faces()
-        self._add_data_layers(self.triangulation_bm, 'DELAUNAY')
-
-        return self.triangulation_bm
-
-
-    """
     Compute the circumcircles for all triangles.
     """
     def _ensure_circumcircles(self):
@@ -464,6 +463,19 @@ class Triangulator:
                 self.circumcircles.append((co, r))
             else:
                 self.circumcircles.append(None)
+
+    """
+    Constructs a triangle mesh that satisfies the Delaunay condition based on the input points.
+    """
+    def construct_delaunay(self, points):
+        self._create_triangulation(points)
+        # Remove redundant mesh elements resulting from repetition
+        self._prune_duplicate_faces()
+
+        self._finalize_faces(self.triangulation_bm, 'DELAUNAY')
+
+        return self.triangulation_bm
+
 
     """
     Creates a face for each cell of the Voronoi graph.
@@ -521,13 +533,7 @@ class Triangulator:
 
             # Can still get a loop with <3 verts in corner cases (colinear vertices)
             if len(voro_loop) >= 3:
-                if self.triangulate_cells:
-                    center_vert = voro_bm.verts.new(vert.co, vert)
-                    for i in range(len(voro_loop) - 1):
-                        voro_bm.faces.new((voro_loop[i], voro_loop[i + 1], center_vert))
-                    voro_bm.faces.new((voro_loop[len(voro_loop) - 1], voro_loop[0], center_vert))
-                else:
-                    voro_bm.faces.new(voro_loop)
+                voro_bm.faces.new(voro_loop)
 
             self.add_debug_mesh(voro_bm, "VoronoiMesh")
 
@@ -546,50 +552,16 @@ class Triangulator:
         self.voronoi_bm = bmesh.new()
         self._create_cell_faces()
 
-        self._add_data_layers(self.voronoi_bm, 'VORONOI')
+        self._finalize_faces(self.voronoi_bm, 'VORONOI')
 
         return self.voronoi_bm
 
 
-    def _add_data_layers(self, bm, graph_type):
-        points = self.points
-
-        if graph_type == 'DELAUNAY':
-            # Delaunay triangulation mesh
-            bm.verts.index_update()
-            bm.faces.index_update()
-
-            # Vertices are generated from input points
-            get_point_index_from_loop = lambda loop: loop.vert.index
-
-            # Combine per-point random value for unique per-face hash
-            def face_random_value(face):
-                r = 0
-                for loop in face.loops:
-                    r ^= random_hash_from_int(points[loop.vert.index].id)
-                return random_uniform_from_int(r)
-            get_face_random_value = face_random_value
-
-            # Cell center is the center of the circum-circle
-            self._ensure_circumcircles()
-            def circumcircle_center(face):
-                circle = self.circumcircles[face.index]
-                return Vector((0, 0)) if circle is None else circle[0].xy
-            get_cell_center_from_face = circumcircle_center
-
-        elif graph_type == 'VORONOI':
-            bm.faces.index_update()
-
-            # One face created for each input point
-            get_point_index_from_loop = lambda loop: loop.face.index
-
-            # Face maps to input point for unique id
-            get_face_random_value = lambda face: random_uniform_from_int(points[face.index].id)
-
-            # Cell center is the input point
-            get_cell_center_from_face = lambda face: points[face.index].co.xy
-
-        else:
+    """
+    Create final face geometry and add data layers.
+    """
+    def _finalize_faces(self, bm, graph_type):
+        if graph_type not in {'DELAUNAY', 'VORONOI'}:
             raise Exception("Invalid graph type {}".format(graph_type))
 
         uv_layer_map = dict()
@@ -597,60 +569,91 @@ class Triangulator:
             uv_layer_name = props.find_enum_name(props.output_uv_layers_items, uv_layer_id)
             uv_layer_map[uv_layer_id] = bm.loops.layers.uv.new(uv_layer_name)
 
-        use_minmax = ('POLYGON' in uv_layer_map)
+        if 'BOUNDS' in uv_layer_map:
+            if self.bounds_min is None or self.bounds_max is None:
+                bounds_loc = Vector((0, 0))
+                bounds_mat = Matrix(((1, 0), (0, 1)))
+            else:
+                extent = Vector(self.bounds_max[:]) - Vector(self.bounds_min[:])
+                bounds_loc = Vector(self.bounds_min[:])
+                bounds_mat = Matrix(((1.0/extent.x if extent.x > degenerate_epsilon else 1, 0), (0, 1.0/extent.y if extent.y > degenerate_epsilon else 1)))
 
-        if self.bounds_min is None or self.bounds_max is None:
-            bounds_loc = Vector((0, 0))
-            bounds_mat = Matrix(((1, 0), (0, 1)))
-        else:
-            extent = Vector(self.bounds_max[:]) - Vector(self.bounds_min[:])
-            bounds_loc = Vector(self.bounds_min[:])
-            bounds_mat = Matrix(((1.0/extent.x if extent.x > degenerate_epsilon else 1, 0), (0, 1.0/extent.y if extent.y > degenerate_epsilon else 1)))
+        if 'CELL_CENTERED' in uv_layer_map:
+            self._ensure_circumcircles()
 
-        for face in bm.faces:
-            if use_minmax:
-                # Determine bounds of the polygon
-                xmin = float_info.max
-                ymin = float_info.max
-                xmax = float_info.min
-                ymax = float_info.min
-                for vert in face.verts:
-                    xmin = min(xmin, vert.co.x)
-                    xmax = max(xmax, vert.co.x)
-                    ymin = min(ymin, vert.co.y)
-                    ymax = max(ymax, vert.co.y)
-                scale_x = 1.0/(xmax - xmin) if (xmax - xmin) > degenerate_epsilon else 1.0
-                scale_y = 1.0/(ymax - ymin) if (ymax - ymin) > degenerate_epsilon else 1.0
-                polygon_loc = Vector((xmin, ymin))
-                polygon_mat = Matrix(((scale_x, 0), (0, scale_y)))
+        bm.verts.index_update()
+        bm.faces.index_update()
 
+        def assign_data_layers(face, orig_face_index, fan_loop, poly_loc, poly_mat):
             for layer_id, layer in uv_layer_map.items():
                 if layer_id == 'POLYGON':
                     for loop in face.loops:
-                        loop[layer].uv = polygon_mat @ (loop.vert.co.xy - polygon_loc)
+                        loop[layer].uv = poly_mat @ (loop.vert.co.xy - poly_loc)
+
                 elif layer_id == 'BOUNDS':
                     for loop in face.loops:
                         loop[layer].uv = bounds_mat @ (loop.vert.co.xy - bounds_loc)
+
                 elif layer_id == 'CELL_CENTERED':
-                    center = get_cell_center_from_face(face)
+                    if graph_type == 'DELAUNAY':
+                        # Cell center is the center of the circum-circle
+                        circle = self.circumcircles[orig_face_index]
+                        center = Vector((0, 0)) if circle is None else circle[0].xy
+                    elif graph_type == 'VORONOI':
+                        # Cell center is the input point
+                        center = self.points[orig_face_index].co.xy
+
                     for loop in face.loops:
                         loop[layer].uv = loop.vert.co.xy - center
+
                 elif layer_id == 'EDGE_CENTERED':
-                    edge_loc, edge_mat = self.edge_coords[face.index]
-                    for loop in face.loops:
-                        loop[layer].uv = edge_mat @ (loop.vert.co.xy - edge_loc)
-                elif layer_id == 'POINT_INDEX':
-                    for loop in face.loops:
-                        point = points[get_point_index_from_loop(loop)]
-                        loop[layer].uv = Vector((point.index, 0))
-                elif layer_id == 'POINT_ID':
-                    for loop in face.loops:
-                        point = points[get_point_index_from_loop(loop)]
-                        loop[layer].uv = Vector((point.id, 0))
-                elif layer_id == 'RANDOM':
-                    r = get_face_random_value(face)
-                    for loop in face.loops:
-                        loop[layer].uv = Vector((r, 0))
+                    if fan_loop is not None:
+                        c0 = fan_loop.vert.co.xy
+                        c1 = fan_loop.link_loop_next.vert.co.xy
+                        c2 = fan_loop.link_loop_next.link_loop_next.vert.co.xy
+                        base = c2 - c1
+                        base_length = base.length
+                        span = c1 - c0
+
+                        if base_length > degenerate_epsilon:
+                            u1 = 0
+                            v1 = span.dot(base) / base_length
+                            u0_squared = span.length_squared - v1*v1
+                            u0 = math.sqrt(u0_squared) if u0_squared > degenerate_epsilon else 0.0
+                            v0 = 0
+                            u2 = 0
+                            v2 = base_length + v1
+
+                            fan_loop[layer].uv = Vector((u0, v0))
+                            fan_loop.link_loop_next[layer].uv = Vector((u1, v1))
+                            fan_loop.link_loop_next.link_loop_next[layer].uv = Vector((u2, v2))
+
+        if self.triangulate_cells:
+            # Cache the face list: triangulating cells will add more faces that must not be triangulated further!
+            orig_faces = bm.faces[:]
+            for face in orig_faces:
+                poly_loc, poly_mat = _get_polygon_transform(face) if 'POLYGON' in uv_layer_map else (None, None)
+
+                if graph_type == 'DELAUNAY':
+                    # Fan around centroid
+                    c0 = face.verts[0].co
+                    c1 = face.verts[1].co
+                    c2 = face.verts[2].co
+                    center = (c0 + c1 + c2) / 3
+                elif graph_type == 'VORONOI':
+                    # Fan around cell point
+                    center = self.points[face.index].co
+
+                center_vert = bm.verts.new(center)
+                for loop in face.loops:
+                    tface = bm.faces.new((loop.vert, loop.link_loop_next.vert, center_vert))
+                    assign_data_layers(tface, face.index, tface.loops[2], poly_loc, poly_mat)
+
+                bm.faces.remove(face)
+        else:
+            for face in bm.faces:
+                poly_loc, poly_mat = _get_polygon_transform(face) if 'POLYGON' in uv_layer_map else (None, None)
+                assign_data_layers(face, face.index, None, poly_loc, poly_mat)
 
 
     """

@@ -33,9 +33,9 @@ output_uv_layers_items = {
     ('BOUNDS', "Bounds", "Position within the input bounds (Local space coordinates if bounds are disabled)"),
     ('CELL_CENTERED', "Cell Centered", "Local space coordinates with circum-circle (Delaunay triangles) or cell center (Voronoi) at the origin"),
     ('EDGE_CENTERED', "Edge Centered", "Local space distance from the cell edge (needs triangulated cells)"),
-    ('POINT_INDEX', "Point Index", "Contiguous index of input point"),
-    ('POINT_ID', "Point ID", "Unique ID of input point, if available"),
-    ('RANDOM', "Random", "Random value based on the id of the input point"),
+    ('POINT_INDEX', "Point Index", "Contiguous index of input point (Voronoi only)"),
+    ('POINT_ID', "Point ID", "Unique ID of input point, if available (Voronoi only)"),
+    ('RANDOM', "Random", "Random value based on the id of the input point (Voronoi only)"),
 }
 
 
