@@ -635,11 +635,15 @@ class Triangulator:
                 poly_loc, poly_mat = _get_polygon_transform(face) if 'POLYGON' in uv_layer_map else (None, None)
 
                 if graph_type == 'DELAUNAY':
-                    # Fan around centroid
+                    # Fan around incenter point (intersection of half-angles).
+                    # This ensures there is no discontinuity of the edge distance at the subdivisions.
                     c0 = face.verts[0].co
                     c1 = face.verts[1].co
                     c2 = face.verts[2].co
-                    center = (c0 + c1 + c2) / 3
+                    w0 = (c2 - c1).length
+                    w1 = (c0 - c2).length
+                    w2 = (c1 - c0).length
+                    center = (c0 * w0 + c1 * w1 + c2 * w2) / (w0 + w1 + w2)
                 elif graph_type == 'VORONOI':
                     # Fan around cell point
                     center = self.points[face.index].co
