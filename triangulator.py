@@ -628,6 +628,25 @@ class Triangulator:
                             fan_loop.link_loop_next[layer].uv = Vector((u1, v1))
                             fan_loop.link_loop_next.link_loop_next[layer].uv = Vector((u2, v2))
 
+                elif layer_id == 'POINT_INDEX':
+                    if graph_type == 'VORONOI':
+                        point = self.points[orig_face_index]
+                        for loop in face.loops:
+                            loop[layer].uv = Vector((point.index, 0))
+
+                elif layer_id == 'POINT_ID':
+                    if graph_type == 'VORONOI':
+                        point = self.points[orig_face_index]
+                        for loop in face.loops:
+                            loop[layer].uv = Vector((point.id, 0))
+
+                elif layer_id == 'RANDOM':
+                    if graph_type == 'VORONOI':
+                        point = self.points[orig_face_index]
+                        r = random_uniform_from_int(point.id)
+                        for loop in face.loops:
+                            loop[layer].uv = Vector((r, 0))
+
         if self.triangulate_cells:
             # Cache the face list: triangulating cells will add more faces that must not be triangulated further!
             orig_faces = bm.faces[:]
