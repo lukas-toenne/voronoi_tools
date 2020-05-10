@@ -215,6 +215,16 @@ class Triangulator:
     """
     circumcircles = None
 
+    """
+    Vertex group index for original points.
+    """
+    vg_original = None
+
+    """
+    Vertex group index for repeated points.
+    """
+    vg_repeated = None
+
     def __init__(self, uv_layers=set(), triangulate_cells=False, bounds_min=None, bounds_max=None):
         self.uv_layers = uv_layers
         self.triangulate_cells = triangulate_cells
@@ -227,6 +237,8 @@ class Triangulator:
     def __exit__(self, exc_type, exc_value, traceback):
         self.points = None
         self.circumcircles = None
+        self.vg_original = None
+        self.vg_repeated = None
         if self.triangulation_bm:
             self.triangulation_bm.free()
             self.triangulation_bm = None
@@ -247,8 +259,7 @@ class Triangulator:
 
         # Create vertex groups for point type
         self.vg_original = ensure_vgroup("OriginalPoints").index
-        self.vg_repeat_pos = ensure_vgroup("RepeatedPointsPos").index
-        self.vg_repeat_neg = ensure_vgroup("RepeatedPointsNeg").index
+        self.vg_repeated = ensure_vgroup("RepeatedPoints").index
 
     """
     Sort the points list by distance from the center in preparation for the sweephull algorithm.
@@ -281,12 +292,10 @@ class Triangulator:
             vert = bm.verts.new(pt.co)
             dvert = vert[dvert_lay]
 
-            if pt.type == 'ORIGINAL':
+            if self.vg_original is not None and pt.type == 'ORIGINAL':
                 dvert[self.vg_original] = 1.0
-            if pt.type == 'REPEAT_POS':
-                dvert[self.vg_repeat_pos] = 1.0
-            if pt.type == 'REPEAT_NEG':
-                dvert[self.vg_repeat_neg] = 1.0
+            if self.vg_repeated is not None and pt.type in {'REPEAT_POS', 'REPEAT_NEG'}:
+                dvert[self.vg_repeated] = 1.0
 
     """
     Construct a triangle mesh using the sweephull method.

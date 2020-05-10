@@ -25,6 +25,7 @@
 # <pep8 compliant>
 
 import bpy
+import threading
 from bpy_types import Operator
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty
 from mathutils import Vector
@@ -74,41 +75,7 @@ def get_points_from_particles(context):
     return points
 
 
-class AddVoronoiCells(VoronoiToolProps, Operator):
-    """Generate Voronoi cells on a surface."""
-    bl_idname = 'mesh.voronoi_add'
-    bl_label = 'Add Voronoi Cells'
-    bl_options = {'UNDO', 'REGISTER'}
-
-    #
-    # Debug settings
-
-    generate_debug_meshes : BoolProperty(
-        name="Generate Debug Meshes",
-        description="Generate a collection of debug meshes for each step",
-        default=False,
-        )
-
-    ################
-
-    @classmethod
-    def poll(cls, context):
-        active_object = context.active_object
-        return active_object and active_object.type == 'MESH'
-
-    def execute(self, context):
-        active_object = context.active_object
-        orig_mode = active_object.mode
-
-        bpy.ops.object.mode_set(mode='OBJECT')
-        try:
-            if not self.generate_mesh(context):
-                return {'CANCELLED'}
-        finally:
-            bpy.ops.object.mode_set(mode=orig_mode)
-
-        return {'FINISHED'}
-
+class VoronoiToolsOperatorBase(VoronoiToolProps):
     def project_points(self, points):
         for i in range(len(points)):
             points[i].co.z = 0.0
@@ -133,9 +100,7 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
                 return [InputPoint(p.id, p.co + Vector((offset_x * dx, offset_y * dy, 0)), type) for p in points]
             points[:] = offset_points(-1, -1) + offset_points(0, -1) + offset_points(1, -1) + offset_points(-1, 0) + offset_points(0, 0) + offset_points(1, 0) + offset_points(-1, 1) + offset_points(0, 1) + offset_points(1, 1)
 
-    def generate_mesh(self, context):
-        obj = context.active_object
-
+    def get_input_points(self, context):
         points = []
         if self.use_vertex_sources:
             points += get_points_from_meshes(context)
@@ -145,110 +110,307 @@ class AddVoronoiCells(VoronoiToolProps, Operator):
         self.project_points(points)
         self.apply_bounds(points)
 
-        with Triangulator(
+        return points
+
+    def get_triangulator(self):
+        return Triangulator(
                 uv_layers=self.output_uv_layers,
                 triangulate_cells=self.triangulate_cells,
                 bounds_min=None if self.bounds_mode == 'NONE' else self.bounds_min,
                 bounds_max=None if self.bounds_mode == 'NONE' else self.bounds_max,
-                ) as triangulator:
-            triangulator.prepare_object(obj)
+                )
 
-            if self.generate_debug_meshes:
-                self.setup_debugging(context, obj, triangulator)
+    def generate_bmesh(self, triangulator, points):
+        if self.output_graph == 'DELAUNAY':
+            return triangulator.construct_delaunay(points)
+        elif self.output_graph == 'VORONOI':
+            return triangulator.construct_voronoi(points)
 
-            if self.output_graph == 'DELAUNAY':
-                bm = triangulator.construct_delaunay(points)
+
+class AddVoronoiCells(VoronoiToolsOperatorBase, Operator):
+    """Generate Voronoi cells on a surface."""
+    bl_idname = 'mesh.voronoi_add'
+    bl_label = 'Add Voronoi Cells'
+    bl_options = {'UNDO', 'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        active_object = context.active_object
+        return active_object and active_object.type == 'MESH'
+
+    def execute(self, context):
+        active_object = context.active_object
+        orig_mode = active_object.mode
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            points = self.get_input_points(context)
+            with self.get_triangulator() as triangulator:
+                obj = context.active_object
+                triangulator.prepare_object(obj)
+                bm = self.generate_bmesh(triangulator, points)
                 bm.to_mesh(obj.data)
+                obj.data.update()
 
-            elif self.output_graph == 'VORONOI':
-                bm = triangulator.construct_voronoi(points)
-                bm.to_mesh(obj.data)
+        finally:
+            bpy.ops.object.mode_set(mode=orig_mode)
 
-        obj.data.update()
+        return {'FINISHED'}
 
-        return True
 
-    def setup_debugging(self, context, obj, triangulator):
+class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
+    """Export Alebic cache of Triangulation and Voronoi steps."""
+    bl_idname = 'voronoi_tools.debug_triangulator'
+    bl_label = 'Debug Triangulator'
+    bl_options = {'UNDO', 'REGISTER'}
+
+    compute_frame_range : BoolProperty(
+        name="Compute Frame Range",
+        description="Perform a dry run to compute the full frame range needed for all debug steps",
+        default=True,
+        )
+
+    @classmethod
+    def poll(cls, context):
+        active_object = context.active_object
+        return active_object and active_object.type == 'MESH'
+
+    def execute(self, context):
+        active_object = context.active_object
+        orig_mode = active_object.mode
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        try:
+            points = self.get_input_points(context)
+            frame_start, frame_end = self.get_frame_range(points)
+            print("Debug output frame range: {}..{}".format(frame_start, frame_end))
+
+            # Condition indicating that the frame has changed and the next debug step should be constructed.
+            # The triangulator waits for this condition before each debug step.
+            step_cond = threading.Condition()
+
+            # Condition indicating that the debug mesh is ready for export.
+            # The exporter frame handler waits for this condition after notifying the triangulator.
+            export_cond = threading.Condition()
+
+            # Start triangulator as a concurrent task.
+            with self.get_triangulator() as triangulator:
+                debug_obj = self.add_debug_object(context)
+                triangulator.prepare_object(debug_obj)
+
+                thread = threading.Thread(target=self.triangulator_thread, name="TriangulatorThread", kwargs={
+                    "step_cond":step_cond, "export_cond":export_cond, "triangulator":triangulator, "points":points, "debug_obj":debug_obj
+                    })
+                thread.start()
+
+                export_filepath = bpy.path.abspath("//VoronoiToolsDebug.abc")
+
+                self.run_exporter(
+                    step_cond=step_cond,
+                    export_cond=export_cond,
+                    frame_start=frame_start,
+                    frame_end=frame_end,
+                    export_objects=[debug_obj],
+                    export_filepath=export_filepath,
+                    )
+
+                if thread.is_alive():
+                    self.cancel_triangulator(step_cond, triangulator)
+                    # Cancel triangulator if not all frames are exported
+                thread.join()
+                print("[Exporter] Finished")
+
+                self.add_mesh_sequence_cache(debug_obj, export_filepath)
+
+        finally:
+            bpy.ops.object.mode_set(mode=orig_mode)
+
+        return {'FINISHED'}
+
+    def get_frame_range(self, points):
+        # Dry run to count the number of frames required
+        if self.compute_frame_range:
+            with self.get_triangulator() as triangulator:
+                numsteps = 0
+                def __count_debug_steps(bm, name):
+                    nonlocal numsteps
+                    numsteps += 1
+                triangulator.add_debug_mesh = __count_debug_steps
+
+                self.generate_bmesh(triangulator, points)
+            return 1, numsteps
+        else:
+            return scene.frame_start, scene.frame_end
+
+    # Run the exporter on the main thread
+    def run_exporter(self, step_cond, export_cond, frame_start, frame_end, export_objects, export_filepath):
+        # XXX Bug in Alembic exporter: will freeze if frame_start > frame_end
+        if frame_start > frame_end:
+            return
+
+        # Frame change handler to wake up the triangulator and wait for the next debug mesh
+        def frame_change_handler(scene):
+            print("[Exporter] Frame Change: {}".format(scene.frame_current))
+            # Wait for notification from the triangulator before exporting
+            with step_cond:
+                step_cond.notify_all()
+            export_cond.wait()
+
+        bpy.app.handlers.frame_change_post.append(frame_change_handler)
+
+        # Hold lock in the main thread for the exporter
+        with export_cond:
+            # XXX Bug in Alembic exporter: context override has no effect, have to change object selection
+            # override = bpy.context.copy()
+            # override['selected_objects'] = export_objects
+            scene = bpy.context.scene
+            orig_selected = set(obj for obj in scene.objects if obj.select_get())
+            for obj in scene.objects:
+                obj.select_set(obj in export_objects)
+
+            # Hack: Alembic exporter has to consider the object "animated" in order to export
+            # topology on every frame. Simple way to do this is to add a dummy modifier other than subsurf,
+            # which is considered mesh animation by the exporter.
+            for obj in export_objects:
+                self.set_dummy_animation_modifier(obj, True)
+
+            bpy.ops.wm.alembic_export(
+                filepath=export_filepath,
+                check_existing=False,
+                selected=True,
+                start=frame_start,
+                end=frame_end)
+
+            # Clean up dummy modifiers
+            for obj in export_objects:
+                self.set_dummy_animation_modifier(obj, False)
+            # Restore original selection
+            for obj in scene.objects:
+                obj.select_set(obj in orig_selected)
+
+        bpy.app.handlers.frame_change_post.remove(frame_change_handler)
+
+    def triangulator_thread(self, step_cond, export_cond, triangulator, points, debug_obj):
+        # Debug steps will be skipped when this flag becomes False.
+        # Condition lock must be used when reading or writing this flag!
+        triangulator.debug_running = True
+
+        # Triangulator debug handler will wait until frame change before updating mesh.
+        # Note that the worker thread holds a general lock on the condition, released temporarily while waiting.
+        def add_debug_mesh(bm, name):
+            if triangulator.debug_running:
+                print("[Triangulator] Debug Mesh: {}".format(name))
+                # Make a copy to avoid modifying the intermediate mesh
+                debug_bm = bm.copy()
+
+                if name == "SweepHull":
+                    triangulator._finalize_faces(debug_bm, graph_type='DELAUNAY')
+                elif name == "EdgeFlip":
+                    triangulator._finalize_faces(debug_bm, graph_type='DELAUNAY')
+                elif name == "VoronoiMesh":
+                    triangulator._finalize_faces(debug_bm, graph_type='VORONOI')
+                else:
+                    raise Exception("Unknown debug name {}, cannot determine graph type".format(name))
+
+                # Store current bmesh state in the mesh datablock
+                debug_bm.to_mesh(debug_obj.data)
+                debug_bm.free()
+                debug_obj.data.update()
+
+                # Notify the exporter that the mesh is ready
+                with export_cond:
+                    export_cond.notify_all()
+                # Wait for the next frame
+                step_cond.wait()
+        triangulator.add_debug_mesh = add_debug_mesh
+
+        # Hold lock in the worker thread
+        with step_cond:
+            # Wait for the initial frame change before updating the mesh
+            step_cond.wait()
+
+            if triangulator.debug_running:
+                print("[Triangulator] Starting triangulator ...")
+                # triangulator.prepare_object(obj)
+                bm = self.generate_bmesh(triangulator, points)
+                # bm.to_mesh(obj.data)
+                # obj.data.update()
+
+            while triangulator.debug_running:
+                print("[Triangulator] skipped frame, debug_running={}".format(triangulator.debug_running))
+                with export_cond:
+                    export_cond.notify_all()
+                step_cond.wait()
+
+    def cancel_triangulator(self, step_cond, triangulator):
+        with step_cond:
+            triangulator.debug_running = False
+            step_cond.notify_all()
+
+    """
+    Add a object to store intermediate meshes and display the final mesh sequence.
+    """
+    def add_debug_object(self, context):
+        obj = context.active_object
         scene = context.scene
 
-        # Add a collection to group all the debug meshes in
-        collection = bpy.data.collections.get("VoronoiToolsDebug")
-        if collection:
-            # Clear existing collection
-            old_objects = collection.objects[:]
-            for old_obj in old_objects:
-                old_data = old_obj.data
-                bpy.data.objects.remove(old_obj)
-                bpy.data.meshes.remove(old_data)
+        # Mesh datablock
+        debug_mesh = bpy.data.meshes.get("VoronoiToolsDebug")
+        if debug_mesh is None:
+            debug_mesh = bpy.data.meshes.new("VoronoiToolsDebug")
+        # Assign material
+        mat = bpy.data.materials.get("VoronoiToolsDebug")
+        if mat is None:
+            mat = bpy.data.materials.new("VoronoiToolsDebug")
+        debug_mesh.materials.append(mat)
+        debug_mesh.update()
+
+        # Object to link the mesh in the scene
+        debug_obj = bpy.data.objects.get("VoronoiToolsDebug")
+        if debug_obj is None:
+            debug_obj = bpy.data.objects.new("VoronoiToolsDebug", debug_mesh)
+        # Copy transform and other attributes from the main object
+        debug_obj.location = obj.location
+        debug_obj.rotation_euler = obj.rotation_euler
+        debug_obj.rotation_quaternion = obj.rotation_quaternion
+        debug_obj.rotation_axis_angle = obj.rotation_axis_angle
+        debug_obj.scale = obj.scale
+        # Useful visualization settings for debugging
+        debug_obj.show_wire = True
+        debug_obj.show_all_edges = True
+
+        # Put debug object into the scene collection
+        if debug_obj.name not in scene.collection.objects:
+            scene.collection.objects.link(debug_obj)
+
+        return debug_obj
+
+    """
+    Add a dummy modifier to force the Alembic exporter to consider the mesh "animated".
+    """
+    def set_dummy_animation_modifier(self, obj, enable):
+        mod = obj.modifiers.get("DummyAnimationModifier")
+        if enable:
+            if mod is None:
+                mod = obj.modifiers.new("DummyAnimationModifier", 'DISPLACE')
+                mod.strength = 0 # modifier has no effect, we only need it to trick the exporter
         else:
-            collection = bpy.data.collections.new("VoronoiToolsDebug")
-            scene.collection.children.link(collection)
+            if mod is not None:
+                obj.modifiers.remove(mod)
 
-        # Implementation of intermediate mesh debugging
-        def add_debug_mesh(bm, name):
-            # Make a copy to avoid modifying the intermediate mesh
-            debug_bm = bm.copy()
-
-            if name == "SweepHull":
-                triangulator._add_data_layers(debug_bm, graph_type='DELAUNAY')
-            elif name == "EdgeFlip":
-                triangulator._add_data_layers(debug_bm, graph_type='DELAUNAY')
-            elif name == "VoronoiMesh":
-                triangulator._add_data_layers(debug_bm, graph_type='VORONOI')
-            else:
-                raise Exception("Unknown debug name {}, cannot determine graph type".format(name))
-
-            # Store current bmesh state in a new mesh datablock
-            debug_mesh = bpy.data.meshes.new("VoronoiToolsDebug.{}".format(name))
-            debug_bm.to_mesh(debug_mesh)
-            debug_bm.free()
-            # Assign material
-            mat = bpy.data.materials.get("VoronoiToolsDebug.{}".format(name))
-            if mat is None:
-                mat = bpy.data.materials.new("VoronoiToolsDebug.{}".format(name))
-            debug_mesh.materials.append(mat)
-            debug_mesh.update()
-
-            # Object to link the mesh in the scene
-            debug_obj = bpy.data.objects.new("VoronoiToolsDebug.{}".format(name), debug_mesh)
-            # Copy transform and other attributes from the main object
-            debug_obj.location = obj.location
-            debug_obj.rotation_euler = obj.rotation_euler
-            debug_obj.rotation_quaternion = obj.rotation_quaternion
-            debug_obj.rotation_axis_angle = obj.rotation_axis_angle
-            debug_obj.scale = obj.scale
-            # Useful visualization settings for debugging
-            debug_obj.show_wire = True
-            debug_obj.show_all_edges = True
-            # Add keyframes to show the object only on one frame
-            # This allows scrubbing the timeline to see the steps of the algorithm
-            frame = len(collection.objects) + 1
-            debug_obj.hide_viewport = True
-            debug_obj.keyframe_insert("hide_viewport", frame=(frame - 1))
-            debug_obj.hide_viewport = False
-            debug_obj.keyframe_insert("hide_viewport", frame=(frame))
-            debug_obj.hide_viewport = True
-            debug_obj.keyframe_insert("hide_viewport", frame=(frame + 1))
-
-            debug_obj.hide_render = True
-            debug_obj.keyframe_insert("hide_render", frame=(frame - 1))
-            debug_obj.hide_render = False
-            debug_obj.keyframe_insert("hide_render", frame=(frame))
-            debug_obj.hide_render = True
-            debug_obj.keyframe_insert("hide_render", frame=(frame + 1))
-            # Set scene frame range to cover all debug objects
-            scene.frame_start = 1
-            scene.frame_end = frame
-
-            # Put debug object into the debug collection
-            collection.objects.link(debug_obj)
-
-        # Replace the dummy method in the triangulator for debug mesh generation
-        triangulator.add_debug_mesh = add_debug_mesh
+    """
+    Add a mesh sequence cache modifier to re-import the Alembic data.
+    """
+    def add_mesh_sequence_cache(self, obj, export_filepath):
+        mod = obj.modifiers.get("MeshSequenceCache")
+        if mod is None:
+            mod = obj.modifiers.new("MeshSequenceCache", 'MESH_SEQUENCE_CACHE')
 
 
 def register():
     bpy.utils.register_class(AddVoronoiCells)
+    bpy.utils.register_class(DebugTriangulator)
 
 def unregister():
     bpy.utils.unregister_class(AddVoronoiCells)
+    bpy.utils.unregister_class(DebugTriangulator)
