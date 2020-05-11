@@ -402,9 +402,14 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
     Add a mesh sequence cache modifier to re-import the Alembic data.
     """
     def add_mesh_sequence_cache(self, obj, export_filepath):
+        import os
         mod = obj.modifiers.get("MeshSequenceCache")
         if mod is None:
             mod = obj.modifiers.new("MeshSequenceCache", 'MESH_SEQUENCE_CACHE')
+        bpy.ops.cachefile.open(filepath=export_filepath)
+        mod.cache_file = bpy.data.cache_files.get(os.path.basename(export_filepath))
+        mod.object_path = "/{}/{}Shape".format(obj.name, obj.name)
+        mod.read_data = {'VERT', 'POLY', 'UV', 'COLOR'}
 
 
 def register():
