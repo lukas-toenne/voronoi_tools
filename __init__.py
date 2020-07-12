@@ -28,7 +28,7 @@ bl_info = {
     'name': 'Voronoi Tools',
     'author': 'Lukas Toenne',
     'version': (1, 0, 0),
-    'blender': (2, 82, 0),
+    'blender': (2, 83, 0),
     'location': '3D View',
     'description':
         'Tools for generating Voronoi pattern meshes',
