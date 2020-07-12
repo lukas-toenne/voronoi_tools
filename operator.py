@@ -182,7 +182,7 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
         bpy.ops.object.mode_set(mode='OBJECT')
         try:
             points = self.get_input_points(context)
-            frame_start, frame_end = self.get_frame_range(points)
+            frame_start, frame_end = self.get_frame_range(context, points)
             print("Debug output frame range: {}..{}".format(frame_start, frame_end))
 
             # Condition indicating that the frame has changed and the next debug step should be constructed.
@@ -196,6 +196,9 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
             # Start triangulator as a concurrent task.
             with self.get_triangulator() as triangulator:
                 debug_obj = self.add_debug_object(context)
+                # XXX Alembic cache bug: crashes when trying to re-use an existing cache file,
+                # remove existing operator to avoid the problem.
+                self.remove_mesh_sequence_cache(debug_obj)
                 triangulator.prepare_object(debug_obj)
 
                 thread = threading.Thread(target=self.triangulator_thread, name="TriangulatorThread", kwargs={
@@ -220,14 +223,14 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
                 thread.join()
                 print("[Exporter] Finished")
 
-                self.add_mesh_sequence_cache(debug_obj, export_filepath)
+                self.create_mesh_sequence_cache(context, debug_obj, export_filepath)
 
         finally:
             bpy.ops.object.mode_set(mode=orig_mode)
 
         return {'FINISHED'}
 
-    def get_frame_range(self, points):
+    def get_frame_range(self, context, points):
         # Dry run to count the number of frames required
         if self.compute_frame_range:
             with self.get_triangulator() as triangulator:
@@ -240,7 +243,7 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
                 self.generate_bmesh(triangulator, points)
             return 1, numsteps
         else:
-            return scene.frame_start, scene.frame_end
+            return context.scene.frame_start, context.scene.frame_end
 
     # Run the exporter on the main thread
     def run_exporter(self, step_cond, export_cond, frame_start, frame_end, export_objects, export_filepath):
@@ -272,7 +275,7 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
             # topology on every frame. Simple way to do this is to add a dummy modifier other than subsurf,
             # which is considered mesh animation by the exporter.
             for obj in export_objects:
-                self.set_dummy_animation_modifier(obj, True)
+                self.create_dummy_animation_modifier(obj)
 
             bpy.ops.wm.alembic_export(
                 filepath=export_filepath,
@@ -283,7 +286,7 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
 
             # Clean up dummy modifiers
             for obj in export_objects:
-                self.set_dummy_animation_modifier(obj, False)
+                self.remove_dummy_animation_modifier(obj)
             # Restore original selection
             for obj in scene.objects:
                 obj.select_set(obj in orig_selected)
@@ -388,28 +391,61 @@ class DebugTriangulator(VoronoiToolsOperatorBase, Operator):
     """
     Add a dummy modifier to force the Alembic exporter to consider the mesh "animated".
     """
-    def set_dummy_animation_modifier(self, obj, enable):
+    def create_dummy_animation_modifier(self, obj):
         mod = obj.modifiers.get("DummyAnimationModifier")
-        if enable:
-            if mod is None:
-                mod = obj.modifiers.new("DummyAnimationModifier", 'DISPLACE')
-                mod.strength = 0 # modifier has no effect, we only need it to trick the exporter
-        else:
-            if mod is not None:
-                obj.modifiers.remove(mod)
+        if mod is None:
+            mod = obj.modifiers.new("DummyAnimationModifier", 'DISPLACE')
+            mod.strength = 0 # modifier has no effect, we only need it to trick the exporter
+
+    """
+    Remove the dummy modifier.
+    """
+    def remove_dummy_animation_modifier(self, obj):
+        mod = obj.modifiers.get("DummyAnimationModifier")
+        if mod is not None:
+            obj.modifiers.remove(mod)
 
     """
     Add a mesh sequence cache modifier to re-import the Alembic data.
     """
-    def add_mesh_sequence_cache(self, obj, export_filepath):
+    def create_mesh_sequence_cache(self, context, obj, export_filepath):
         import os
+
         mod = obj.modifiers.get("MeshSequenceCache")
         if mod is None:
             mod = obj.modifiers.new("MeshSequenceCache", 'MESH_SEQUENCE_CACHE')
-        bpy.ops.cachefile.open(filepath=export_filepath)
-        mod.cache_file = bpy.data.cache_files.get(os.path.basename(export_filepath))
-        mod.object_path = "/{}/{}Shape".format(obj.name, obj.name)
+
+        cache_name = os.path.basename(export_filepath)
+        mod.cache_file = bpy.data.cache_files.get(cache_name)
+        # XXX Cache file bug: running the operator to load an existing cache file will crash,
+        # instead have to re-use and reload the existing cache file ID block.
+        if mod.cache_file is None:
+            self.report({'INFO'}, "Loading Alembic cache file {}".format(export_filepath))
+            overrides = context.copy()
+            overrides['modifier'] = mod 
+            bpy.ops.cachefile.open(overrides, filepath=export_filepath)
+            mod.cache_file = bpy.data.cache_files.get(cache_name)
+        else:
+            self.report({'INFO'}, "Reloading Alembic cache file {}".format(mod.cache_file.filepath))
+            overrides = context.copy()
+            overrides['modifier'] = mod 
+            bpy.ops.cachefile.reload(overrides)
+
+        object_path = "/{}/{}Shape".format(obj.name, obj.name)
+        if object_path in mod.cache_file.object_paths:
+            mod.object_path = object_path
+        else:
+            self.report({'WARNING'}, "Object path {} not found in cache file".format(object_path))
+
         mod.read_data = {'VERT', 'POLY', 'UV', 'COLOR'}
+
+    """
+    Remove the mesh sequence cache modifier.
+    """
+    def remove_mesh_sequence_cache(self, obj):
+        mod = obj.modifiers.get("MeshSequenceCache")
+        if mod is not None:
+            obj.modifiers.remove(mod)
 
 
 def register():
